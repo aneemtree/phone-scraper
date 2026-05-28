@@ -47,23 +47,48 @@ def clean_model(title: str) -> str:
     t = re.sub(r"\b\d+\s?(GB|TB)\b", " ", t, flags=re.I) # storage
     for c in COLORS:                                     # colors (longest first)
         t = re.sub(rf"\b{re.escape(c)}\b", " ", t, flags=re.I)
-    t = re.sub(r"\b(refurbished|renewed|pre-?owned|open box|certified)\b", " ", t, flags=re.I)
-    t = re.sub(r"\b(special series|saver series|aurora|titanium|esim|e-sim|physical sim|dual sim|5g)\b", " ", t, flags=re.I)
+    t = re.sub(r"\b(refurbished|renewed|pre-?owned|open\s*box|certified|certified refurbished)\b", " ", t, flags=re.I)
+    t = re.sub(r"\b(special series|saver series|aurora|titanium|esim|e-?sim|physical sim|dual sim)\b", " ", t, flags=re.I)
+    # Network/connectivity suffixes (5G, 4G, LTE, WiFi variants)
+    t = re.sub(r"\b(5g|4g|lte|3g|wifi|wi-fi)\b", " ", t, flags=re.I)
+    # Regional/market variants
+    t = re.sub(r"\b(india|indian|global|international|export|us|usa|uk|eu)\b", " ", t, flags=re.I)
+    # Packaging/condition noise
+    t = re.sub(r"\b(with\s+box|without\s+box|brand\s+box|original\s+box|sealed\s+box|open\s+box)\b", " ", t, flags=re.I)
+    t = re.sub(r"\b(accessories|charger|cable|earphone|adapter)\b", " ", t, flags=re.I)
+    # Model number noise (e.g. "SM-G991B", "CPH2197")
+    t = re.sub(r"\b[A-Z]{2,4}-?[A-Z0-9]{4,}\b", " ", t)
+    # Year suffixes standalone (e.g. "iPhone 13 2021" -> "iPhone 13")
+    t = re.sub(r"\b(20[12][0-9])\b", " ", t)
+    # "Series" standalone
+    t = re.sub(r"\bseries\b", " ", t, flags=re.I)
     t = re.sub(r"[\-–|()]+", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
     # Normalize common casing: "Iphone"/"iphone" -> "iPhone"
     t = re.sub(r"\biphone\b", "iPhone", t, flags=re.I)
     t = re.sub(r"\bipad\b", "iPad", t, flags=re.I)
-    # Title-case the rest while preserving iPhone/iPad
+    # Title-case words while preserving:
+    # - Known brand tokens (iPhone, iPad)
+    # - Alphanumeric tokens like "2T", "S23", "FE", "CE" (all caps short = keep caps)
     words = []
     for w in t.split():
         if w in ("iPhone", "iPad"):
             words.append(w)
-        elif w.isupper() and len(w) > 1:
-            words.append(w.capitalize())
+        elif re.match(r'^[A-Z0-9]+$', w) and len(w) <= 4:
+            # Short all-caps/alphanumeric token like FE, CE, 2T, 5G — keep as-is
+            words.append(w)
+        elif re.match(r'^[0-9]+[A-Z]+$', w):
+            # Numeric+uppercase like 2T, 5G — keep as-is
+            words.append(w)
         else:
-            words.append(w[:1].upper() + w[1:] if w else w)
+            words.append(w[:1].upper() + w[1:].lower() if w else w)
     t = " ".join(words)
+    # Apply brand casing AFTER title-casing so they aren't overwritten
+    t = re.sub(r"\biphone\b", "iPhone", t, flags=re.I)
+    t = re.sub(r"\bipad\b", "iPad", t, flags=re.I)
+    t = re.sub(r"\boneplus\b", "OnePlus", t, flags=re.I)
+    t = re.sub(r"\bpoco\b", "POCO", t, flags=re.I)
+    t = re.sub(r"\biqoo\b", "iQOO", t, flags=re.I)
     return t
 
 

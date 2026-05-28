@@ -2,9 +2,7 @@
 venv/
 __pycache__/
 *.pyc
-*.png
-*.txt
 .DS_Store
 diagnose*.py
-oppo_*.txt
-oppo_*.png
+oppo_payload.txt
+oppo_render.png

@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 """
 Database helper. Connects to Supabase and saves phones + price snapshots.
 All scrapers import from here.

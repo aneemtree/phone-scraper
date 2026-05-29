@@ -1,60 +1,44 @@
-# phone-scraper — Project Context
+## Standard scraping approach (apply to ALL scrapers)
 
-Python scrapers for RefurbCompare. Auto-runs daily via GitHub Actions.
+### Price capture rule
+For every (condition, storage) combination, always cycle through ALL available
+colors and capture the LOWEST price. Never save the first/default color price.
+Colors affect price — e.g. green might be ₹1,500 cheaper than black for the
+same condition+storage.
 
-## Stack
-- Python 3.14 in venv
-- requests + BeautifulSoup for plain HTML sites
-- Playwright (Chromium) for JS-rendered sites
-- supabase-py for DB writes
-- python-dotenv for local secrets
+### Availability rule
+Only scrape what is visibly available to the user on the product page.
+Never use JSON-LD structured data or API responses as the source of truth for
+availability — they often contain phantom/draft listings not shown to users.
+Use the rendered UI: opacity-50, line-through text, disabled states = unavailable.
 
-## Secrets
-- Stored in .env locally (never commit)
-- On GitHub: repo secrets SUPABASE_URL and SUPABASE_SERVICE_KEY
-- load_dotenv() at top of db.py handles both cases
+### Condition handling
+Each product page may have multiple condition grades (e.g. Fair/Good/Superb on
+Cashify, Premium Renewed/Saver Series on ControlZ). For each available condition:
+  - Click it
+  - For each available storage: click it
+    - For each available color: click it, read price
+    - Keep the minimum price across colors
+  - Save one row per (variant_key, condition) with the lowest price found
 
-## Key files
-- controlz.py — Playwright scraper. Visits each product page, reads visible Category options and prices per storage. Handles Premium Renewed and Saver Series.
-- db.py — Supabase helpers: save_phone(), save_price(), ensure_image()
-- normalize.py — clean_model(), normalize_storage(), normalize_ram(), make_variant_key()
-- .github/workflows/scrape.yml — daily 07:30 IST, also triggers on push
+### Normalization (normalize.py)
+All scrapers must pass model names through clean_model() and storage through
+normalize_storage() before calling make_variant_key(). Never save raw names.
+Key noise words already stripped: 5G, 4G, India, With Box, Open Box, Series,
+model numbers (SM-G991B), years (2021), Refurbished, Renewed, colors, etc.
+Brand casing: iPhone, iPad, OnePlus, POCO, iQOO are normalized.
 
-## Data model rules
-- variant_key format: model-slug_storage e.g. apple-iphone-11_128gb (underscores, no pipes)
-- One phones row per (site, variant name). Same variant_key can appear for multiple sites.
-- prices is append-only history. One row per (phone_id, condition) per scrape.
-- Conditions: ONLY what's visible on the product page UI. Never from JSON-LD (unreliable).
-- Availability: use inventory > 0 (status field DRAFT/ACTIVE is unreliable on ControlZ)
-- Images: download once on first sighting → upload to Supabase Storage "phone-images" bucket → store our URL. Skip if already exists. Path format: {site}/{variant_key}.jpg
+### Manual merge fallback
+If two stores produce different variant_keys for the same physical phone
+(normalization didn't catch it), set canonical_key on both phones rows in
+Supabase to the same value. The offers view uses coalesce(canonical_key, variant_key).
 
-## normalize.py rules
-- Colors stripped from model names (long list including "phantom black", "natural titanium" etc)
-- "Saver series", "special series", "esim", "5g", "titanium" also stripped
-- "iphone" normalized to "iPhone", "ipad" to "iPad"
-- Storage normalized: "128-GB" / "128 GB" → "128GB"
-- RAM only extracted when explicitly labelled (e.g. "8GB RAM") — never from storage figures
+### Image hosting
+Download and host images in Supabase Storage bucket "phone-images" on FIRST
+sighting only. Path format: {site}/{variant_key}.jpg. Skip if already exists.
+Use ensure_image() from db.py.
 
-## ControlZ scraper notes
-- Listing page uses self.__next_f RSC payload chunks (not __NEXT_DATA__)
-- Product pages rendered by Playwright at 1366x900 viewport (desktop so nothing collapses)
-- wait_until="domcontentloaded" + wait_for_selector — NOT networkidle (site never idles)
-- Category options: visible buttons only (hidden ones are storage/color selectors)
-- Price read from <p class="...text-primary"> near "Starting From" label
-- Rating/reviews read from page text matching pattern "4.7 · 21 REVIEWS"
-- 1.5s delay between product pages to be polite
-
-## Stores to build next
-- Cashify (https://www.cashify.in/buy-refurbished-mobile-phones/all-phones)
-  Plain HTML (price found in View Source). Multiple condition grades expected.
-- Croma (https://www.croma.com/phones-wearables/mobile-phones/refurbished-mobile-phones/c/191)
-  Plain HTML.
-- Refit — URL not yet confirmed. Plain HTML.
-- Xtracover (https://www.xtracover.com/buy-refurbished/mobiles?...)
-  JS-rendered (price NOT in View Source) — needs Playwright or API hunting.
-
-## GitHub Actions workflow
-- File: .github/workflows/scrape.yml
-- Installs Playwright with: python -m playwright install --with-deps chromium
-- Secrets injected as env vars (SUPABASE_URL, SUPABASE_SERVICE_KEY)
-- To add a new scraper: add "python newsite.py" as a new step in the workflow
+### Store metadata
+After adding a new store, add a row to the stores table:
+  insert into stores (site, display_name, website_url) values ('newsite', 'New Site', 'https://...');
+Upload the store logo to Supabase Storage "logos" bucket and update logo_url.

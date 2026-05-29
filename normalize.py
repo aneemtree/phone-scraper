@@ -39,6 +39,80 @@ def normalize_ram(raw: str | None) -> str | None:
     return f"{m.group(1)}GB" if m else None
 
 
+def parse_size_string(size_str: str | None) -> tuple[str | None, str | None]:
+    """Parse a size string into (ram, storage) for any scraper.
+
+    Handles all known formats across stores:
+      "6GB|1TB"           → ram=6GB,  storage=1TB   (Refit pipe format)
+      "4GB|128GB"         → ram=4GB,  storage=128GB
+      "6 GB RAM / 128 GB" → ram=6GB,  storage=128GB  (Cashify explicit RAM)
+      "4 GB / 256 GB"     → ram=4GB,  storage=256GB  (Cashify slash format)
+      "8 GB / 1 TB"       → ram=8GB,  storage=1TB
+      "128GB"             → ram=None, storage=128GB  (single value)
+      "1TB"               → ram=None, storage=1TB
+
+    Rules:
+    - Explicit "RAM" keyword → that value is RAM
+    - Two values: smaller = RAM (converted to GB for comparison), larger = storage
+    - RAM sanity check: if "smaller" > 32GB, both are storage variants, not RAM
+    - Single value: always storage
+    """
+    if not size_str:
+        return None, None
+
+    def _to_gb(part: str) -> int | None:
+        """Convert a size token to GB integer for comparison."""
+        part = part.strip().upper().replace(" ", "").replace("-", "")
+        m = re.search(r"(\d+(?:\.\d+)?)TB", part)
+        if m:
+            return int(float(m.group(1)) * 1024)
+        m = re.search(r"(\d+)GB", part)
+        if m:
+            return int(m.group(1))
+        return None
+
+    # Explicit RAM label (e.g. "6 GB RAM / 128 GB" or "6GB RAM")
+    ram_label = re.search(r"(\d+)\s*GB\s*RAM", size_str, re.I)
+    if ram_label:
+        ram = f"{ram_label.group(1)}GB"
+        # Storage is whatever GB/TB value remains after removing the RAM part
+        rest = re.sub(r"\d+\s*GB\s*RAM", "", size_str, flags=re.I)
+        storage = normalize_storage(rest.strip(" /|-"))
+        return ram, storage
+
+    # Split on common separators: pipe, slash, comma
+    parts = [p.strip() for p in re.split(r"[|/,]", size_str) if p.strip()]
+    if len(parts) == 2:
+        va, vb = _to_gb(parts[0]), _to_gb(parts[1])
+        la, lb = normalize_storage(parts[0]), normalize_storage(parts[1])
+        if va is not None and vb is not None:
+            smaller_gb = min(va, vb)
+            # Sanity: RAM is never > 32GB in any phone
+            if smaller_gb > 32:
+                # Both are storage sizes (e.g. upgrade options) — no RAM
+                return None, la if va <= vb else lb
+            ram_label_, storage_label = (la, lb) if va <= vb else (lb, la)
+            return ram_label_, storage_label
+        # Only one side parsed — return as storage
+        return None, la or lb
+
+    # Single value: storage only
+    return None, normalize_storage(size_str.strip())
+
+
+def normalize_condition(condition: str | None) -> str | None:
+    """Normalize condition names to consistent title case."""
+    if not condition:
+        return None
+    # Strip and title case
+    c = condition.strip().title()
+    # Fix known variations
+    c = re.sub(r"\bRenewed\b", "Renewed", c)
+    c = re.sub(r"\bRefurbished\b", "Refurbished", c)
+    c = re.sub(r"\bSuperb\b", "Superb", c)
+    return c
+
+
 def clean_model(title: str) -> str:
     """Strip storage, color, and refurb noise to get a clean model name."""
     t = title
@@ -48,6 +122,7 @@ def clean_model(title: str) -> str:
     for c in COLORS:                                     # colors (longest first)
         t = re.sub(rf"\b{re.escape(c)}\b", " ", t, flags=re.I)
     t = re.sub(r"\b(refurbished|renewed|pre-?owned|open\s*box|certified|certified refurbished)\b", " ", t, flags=re.I)
+    t = re.sub(r"\b(controlz|cashify|refit|xtracover|croma)\b", " ", t, flags=re.I)
     t = re.sub(r"\b(special series|saver series|aurora|titanium|esim|e-?sim|physical sim|dual sim)\b", " ", t, flags=re.I)
     # Network/connectivity suffixes (5G, 4G, LTE, WiFi variants)
     t = re.sub(r"\b(5g|4g|lte|3g|wifi|wi-fi)\b", " ", t, flags=re.I)
@@ -92,11 +167,13 @@ def clean_model(title: str) -> str:
     return t
 
 
-def make_variant_key(model: str, storage: str | None, ram: str | None) -> str:
-    """Cross-site grouping key. Color-free; RAM optional (blank for iPhones).
-    Uses URL-safe separators (no pipes) so keys work cleanly in page URLs."""
-    base = re.sub(r"[^a-z0-9]+", "-", model.lower()).strip("-")
+def make_variant_key(model: str, storage: str | None, ram: str | None = None) -> str:
+    """Cross-site grouping key. Uses model + storage ONLY (no RAM).
+    RAM is stored in the ram column for display but excluded from the key
+    because most stores don't surface RAM, causing cross-store mismatches.
+    Uses URL-safe separators so keys work cleanly in page URLs."""
+    base = re.sub(r"[^a-z0-9]+", "-", (model or "").lower()).strip("-")
     parts = [base]
-    if storage: parts.append(storage.lower())
-    if ram: parts.append(ram.lower())
+    if storage:
+        parts.append(re.sub(r"[^a-z0-9]+", "", storage.lower()))
     return "_".join(parts)

@@ -18,7 +18,7 @@ import json
 import time
 import requests
 from playwright.sync_api import sync_playwright
-from normalize import clean_model, normalize_storage, normalize_ram, make_variant_key
+from normalize import clean_model, normalize_storage, normalize_ram, make_variant_key, parse_size_string, normalize_condition
 from db import save_phone, save_price, ensure_image
 
 SITE = "controlz"
@@ -30,19 +30,27 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 
 
 def get_product_slugs():
+    """Get all product slugs from ControlZ listing page RSC payload.
+    Uses the adjacent productType+slug pattern which is reliable.
+    Titles are not extracted here — they're read from the product page during scraping.
+    """
     resp = requests.get(LISTING_URL, headers={"User-Agent": UA}, timeout=30)
     resp.raise_for_status()
     chunks = re.findall(r'self\.__next_f\.push\(\[\d+,(".*?")\]\)', resp.text, re.S)
     payload = "".join(json.loads(c) for c in chunks if c.startswith('"'))
-    products, seen = [], set()
-    for m in re.finditer(r'"productType":"phone"', payload):
-        seg = payload[max(0, m.start() - 1500):m.start() + 200]
-        slug = re.search(r'"slug":"([^"]+)"', seg)
-        title = re.search(r'"title":"([^"]+)"', seg)
-        if slug and slug.group(1) not in seen:
-            seen.add(slug.group(1))
-            products.append({"slug": slug.group(1),
-                             "title": title.group(1) if title else slug.group(1)})
+
+    SKIP_SLUGS = {"power-bank", "powerbank", "charger", "cable", "case", "cover",
+                  "earphone", "headphone", "adapter", "hub", "stand"}
+
+    seen, products = set(), []
+    for m in re.finditer(r'"productType":"phone","slug":"([^"]+)"', payload):
+        slug_val = m.group(1)
+        if slug_val in seen:
+            continue
+        if slug_val in SKIP_SLUGS or any(sk in slug_val for sk in SKIP_SLUGS):
+            continue
+        seen.add(slug_val)
+        products.append({"slug": slug_val, "title": slug_val})  # title read from product page
     return products
 
 
@@ -150,10 +158,15 @@ def parse_price(text):
 def scrape_product(page, slug):
     url = f"{BASE_URL}/products/{slug}"
     page.goto(url, timeout=60000, wait_until="domcontentloaded")
+    # Read title from h1 before any early return
+    page_title = page.evaluate("""() => {
+        const h1 = document.querySelector('h1');
+        return h1 ? h1.innerText.trim() : null;
+    }""")
     try:
         page.wait_for_selector(".variant-options-container", timeout=20000)
     except Exception:
-        return url, []
+        return url, page_title, None, None, None, []
     page.wait_for_timeout(1200)
     image_url = read_image(page)
     rating, review_count = read_rating_reviews(page)
@@ -170,10 +183,23 @@ def scrape_product(page, slug):
             if st:
                 click_option(page, "storage", st)
                 page.wait_for_timeout(500)
-            price = parse_price(read_price(page))
+            # Get all available colors, click each, keep lowest price
+            colors = section_buttons(page, "color")
+            available_colors = [c for c in colors if c] if colors else []
+            if available_colors:
+                prices = []
+                for color in available_colors:
+                    click_option(page, "color", color)
+                    page.wait_for_timeout(400)
+                    p_val = parse_price(read_price(page))
+                    if p_val is not None:
+                        prices.append(p_val)
+                price = min(prices) if prices else None
+            else:
+                price = parse_price(read_price(page))
             if price is not None:
-                out.append((cond, st, price))
-    return url, image_url, rating, review_count, out
+                out.append((normalize_condition(cond), st, price))
+    return url, page_title, image_url, rating, review_count, out
 
 
 def scrape():
@@ -186,12 +212,12 @@ def scrape():
         for idx, prod in enumerate(products, 1):
             slug, parent_title = prod["slug"], prod["title"]
             try:
-                url, image_url, rating, review_count, rows = scrape_product(page, slug)
+                url, page_title, image_url, rating, review_count, rows = scrape_product(page, slug)
             except Exception as e:
                 print(f"  [{idx}/{len(products)}] {slug}: ERROR {str(e)[:80]}")
                 time.sleep(DELAY_SECONDS); continue
             for cond, st, price in rows:
-                model = clean_model(parent_title)
+                model = clean_model(page_title or parent_title)
                 storage = normalize_storage(st) if st else None
                 ram = normalize_ram(parent_title)
                 vkey = make_variant_key(model, storage, ram)

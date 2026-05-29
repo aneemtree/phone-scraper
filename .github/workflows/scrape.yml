@@ -46,6 +46,14 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python refit.py
 
+
+
+      - name: Run Xtracover scraper
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python xtracover.py
+
       - name: AI normalization (clean names + merge duplicates)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

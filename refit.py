@@ -22,8 +22,8 @@ Run with: python3 refit.py
 import re
 import time
 import requests
-from normalize import clean_model, normalize_storage, make_variant_key, parse_size_string, normalize_condition
-from db import save_phone, save_price, ensure_image
+from normalize import clean_model, normalize_storage, make_variant_key, parse_size_string, normalize_condition, is_phone
+from db import save_phone, save_price, ensure_image, mark_site_oos
 
 SITE = "refit"
 BASE_URL = "https://refitglobal.com"
@@ -89,6 +89,7 @@ def get_image(product):
 
 
 def scrape():
+    mark_site_oos("refit")
     print("Fetching all products from Refit API...")
     products = fetch_all_products()
     print(f"\nTotal products: {len(products)}")

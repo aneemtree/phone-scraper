@@ -25,8 +25,8 @@ import re
 import time
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
-from normalize import clean_model, normalize_storage, make_variant_key, parse_size_string, normalize_condition
-from db import save_phone, save_price, ensure_image
+from normalize import clean_model, normalize_storage, make_variant_key, parse_size_string, normalize_condition, parse_name_from_listing, is_phone
+from db import save_phone, save_price, ensure_image, mark_site_oos
 
 SITE = "xtracover"
 BASE_URL = "https://www.xtracover.com"
@@ -35,24 +35,9 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
 
-def parse_name(raw):
-    """Parse model name and storage from listing card name.
-    e.g. "Apple iPhone 11 (64 GB) Black" → model="Apple iPhone 11", storage="64GB"
-    """
-    # Extract storage from parentheses e.g. (64 GB) or (128GB)
-    storage_match = re.search(r"\((\d+\s*(?:GB|TB))\)", raw, re.I)
-    storage = normalize_storage(storage_match.group(1)) if storage_match else None
+def parse_name(raw, href=""):
+    return parse_name_from_listing(raw, href)
 
-    # Remove storage, color words, and noise from name
-    name = raw
-    if storage_match:
-        name = name[:storage_match.start()].strip()
-    # Strip trailing color words (anything after the model number)
-    # Model ends at last number token — strip anything after
-    name = re.sub(r"\s*-\s*Refurbished.*$", "", name, flags=re.I).strip()
-
-    model = clean_model(name)
-    return model, storage
 
 
 def parse_grade(href):
@@ -107,6 +92,7 @@ def scrape_listing():
 
 
 def scrape():
+    mark_site_oos("xtracover")
     html = scrape_listing()
     soup = BeautifulSoup(html, "html.parser")
     cards = soup.select(".product-card")
@@ -136,21 +122,21 @@ def scrape():
         except (ValueError, KeyError):
             continue
 
-        # Name → model + storage
-        name_meta = card.select_one("meta[itemprop='name']")
-        if not name_meta:
-            continue
-        raw_name = name_meta["content"]
-        model, storage = parse_name(raw_name)
-        if not model:
-            continue
-
-        # Product URL → grade
+        # Product URL → grade (get this first so we can use href in parse_name)
         link = card.select_one("a[href*='/buy-refurbished/mobiles/']")
         if not link:
             continue
         href = link["href"]
         url = BASE_URL + href if href.startswith("/") else href
+
+        # Name → model + storage (pass href as fallback for storage extraction)
+        name_meta = card.select_one("meta[itemprop='name']")
+        if not name_meta:
+            continue
+        raw_name = name_meta["content"]
+        model, _, storage = parse_name(raw_name, href)
+        if not model or not is_phone(model, href):
+            continue
         grade = normalize_condition(parse_grade(href))
 
         # Image

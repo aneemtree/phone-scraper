@@ -113,6 +113,117 @@ def normalize_condition(condition: str | None) -> str | None:
     return c
 
 
+# Keywords that indicate a non-phone product
+NON_PHONE_KEYWORDS = [
+    "power bank", "powerbank", "power-bank",
+    "photography kit", "photo kit", "kit",
+    "smartwatch", "smart watch", "watch",
+    "tablet", "ipad",
+    "laptop", "notebook",
+    "earphone", "earbuds", "headphone", "airpods",
+    "charger", "cable", "adapter", "hub",
+    "case", "cover", "screen guard", "tempered glass",
+    "accessory", "accessories",
+    "stand", "holder", "mount",
+    "speaker", "camera",
+    "legend edition",  # photography kit variant
+]
+
+PHONE_BRANDS = [
+    "iphone", "samsung", "galaxy", "oneplus", "oppo", "vivo", "realme",
+    "xiaomi", "redmi", "poco", "iqoo", "motorola", "nokia", "google",
+    "pixel", "nothing", "asus", "lg", "huawei", "honor", "sony",
+    "infinix", "tecno", "lava", "micromax", "mi",
+]
+
+def is_phone(name: str, slug: str = "") -> bool:
+    """Return True if the product name/slug looks like a phone, False if accessory/non-phone."""
+    text = (name + " " + slug).lower()
+    # Reject if any non-phone keyword found
+    for kw in NON_PHONE_KEYWORDS:
+        if kw in text:
+            return False
+    return True
+
+
+def parse_name_from_listing(raw: str, href: str = "") -> tuple[str, str | None, str | None]:
+    """Parse model, ram, storage from a listing card product name.
+    Handles all known formats across stores:
+      "Apple iPhone 11 (64 GB) Black"              → iPhone 11, None, 64GB
+      "Apple iPhone 11 (64 GB, Matte Space Grey)"  → iPhone 11, None, 64GB
+      "Redmi Note 12 (8GB RAM, 128GB)"              → Note 12, 8GB, 128GB
+      "Samsung Galaxy S23 FE 8/128GB"               → S23 FE, 8GB, 128GB
+      "Apple iPhone 13 Pro 512GB"                   → 13 Pro, None, 512GB
+    Falls back to URL slug if name has no storage.
+    """
+    import re as _re
+
+    raw = raw.strip()
+    ram, storage = None, None
+
+    # 1. Parenthesised storage: (64 GB), (128GB), (64 GB, Color), (8GB RAM, 128GB)
+    paren = _re.search(r"\(([^)]+)\)", raw)
+    if paren:
+        content = paren.group(1)
+        ram, storage = parse_size_string(content)
+        if not storage:
+            m = _re.search(r"(\d+\s*(?:GB|TB))", content, _re.I)
+            if m:
+                storage = normalize_storage(m.group(1))
+        name_part = raw[:paren.start()].strip()
+
+        # If paren had no storage (e.g. "(Fold 7)"), check for trailing size after paren
+        if not storage:
+            after_paren = raw[paren.end():].strip()
+            slash = _re.search(r"^.*?(\d+)/(\d+\s*(?:GB|TB))\s*$", after_paren, _re.I)
+            if slash:
+                ram = normalize_storage(slash.group(1) + "GB")
+                storage = normalize_storage(slash.group(2))
+            else:
+                size_m = _re.search(r"(\d+\s*(?:GB|TB))\s*$", after_paren, _re.I)
+                if size_m:
+                    storage = normalize_storage(size_m.group(1))
+    else:
+        name_part = raw
+
+        # 2. Slash format at end: "8/128GB", "12/256GB"
+        slash = _re.search(r"\s+(\d+)/(\d+\s*(?:GB|TB))\s*$", raw, _re.I)
+        if slash:
+            ram = normalize_storage(slash.group(1) + "GB")
+            storage = normalize_storage(slash.group(2))
+            name_part = raw[:slash.start()].strip()
+        else:
+            # 3. Space-separated tokens at end: "8GB 256GB", "512GB"
+            tokens = raw.split()
+            size_tokens = []
+            remaining = list(tokens)
+            while remaining:
+                last = remaining[-1]
+                if _re.match(r"^\d+\s*(?:GB|TB)$", last, _re.I):
+                    size_tokens.insert(0, last)
+                    remaining.pop()
+                else:
+                    break
+            if size_tokens:
+                name_part = " ".join(remaining)
+                if len(size_tokens) == 1:
+                    storage = normalize_storage(size_tokens[0])
+                else:
+                    ram, storage = parse_size_string("|".join(size_tokens))
+
+    # 4. URL slug fallback: "64-gb", "128-gb", "256gb"
+    if not storage and href:
+        slug_m = _re.search(r"[-_](\d+)[-_]?(gb|tb)", href, _re.I)
+        if slug_m:
+            unit = "TB" if slug_m.group(2).lower() == "tb" else "GB"
+            storage = normalize_storage(f"{slug_m.group(1)}{unit}")
+
+    # Strip trailing noise: "- Refurbished", color words
+    name_part = _re.sub(r"\s*[-–]\s*Refurbished.*$", "", name_part, flags=_re.I).strip()
+    model = clean_model(name_part)
+    return model, ram, storage
+
+
 def clean_model(title: str) -> str:
     """Strip storage, color, and refurb noise to get a clean model name."""
     t = title
@@ -122,6 +233,18 @@ def clean_model(title: str) -> str:
     for c in COLORS:                                     # colors (longest first)
         t = re.sub(rf"\b{re.escape(c)}\b", " ", t, flags=re.I)
     t = re.sub(r"\b(refurbished|renewed|pre-?owned|open\s*box|certified|certified refurbished)\b", " ", t, flags=re.I)
+    t = re.sub(r"^buy\s+", "", t, flags=re.I)  # strip leading "Buy " prefix
+
+    # Normalize brand names
+    t = re.sub(r"^Galaxy\s", "Samsung Galaxy ", t)           # Galaxy S23 → Samsung Galaxy S23
+    t = re.sub(r"^Moto\s", "Motorola Moto ", t)              # Moto G84 → Motorola Moto G84
+    t = re.sub(r"^Motorola\s+Motorola\s+", "Motorola ", t)  # prevent double Motorola
+    t = re.sub(r"^iPhone\s", "Apple iPhone ", t)             # iPhone 15 → Apple iPhone 15
+    t = re.sub(r"^Redmi\s", "Xiaomi Redmi ", t)              # Redmi Note 12 → Xiaomi Redmi Note 12
+    t = re.sub(r"^Apple\s+Apple\s+", "Apple ", t)           # prevent double Apple
+    t = re.sub(r"^Xiaomi\s+Xiaomi\s+", "Xiaomi ", t)        # prevent double Xiaomi
+    t = re.sub(r"\bunbox(?:ed)?\b", " ", t, flags=re.I)  # strip unboxed/unbox
+    t = re.sub(r"[/\\|]+$", "", t).strip()  # strip trailing slashes/pipes
     t = re.sub(r"\b(controlz|cashify|refit|xtracover|croma)\b", " ", t, flags=re.I)
     t = re.sub(r"\b(special series|saver series|aurora|titanium|esim|e-?sim|physical sim|dual sim)\b", " ", t, flags=re.I)
     # Network/connectivity suffixes (5G, 4G, LTE, WiFi variants)

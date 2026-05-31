@@ -1,13 +1,13 @@
 """
 AI-powered normalization pass using Claude API.
 
-Runs AFTER all scrapers complete. Does two things in one pass per batch:
-1. Cleans model names (strips store names, noise words the regex missed)
-2. Groups cross-store duplicates and sets canonical_key
+Three passes:
+  Pass 0 — identify and DELETE non-phones (accessories, tablets, laptops, etc.)
+  Pass 1 — clean model names (strip store names, noise words)
+  Pass 2 — group by cleaned name, set canonical_key for cross-store duplicates
 
-Usage:
-    python3 normalize_ai.py
-
+Run AFTER all scrapers complete.
+Usage: python3 normalize_ai.py
 Requires ANTHROPIC_API_KEY in .env
 """
 import os
@@ -36,55 +36,8 @@ def fetch_phones():
     return resp.data
 
 
-def ask_claude(phones_batch):
-    """Send a batch of phones to Claude for name cleaning and duplicate detection.
-    Returns a list of corrections."""
-
-    entries = []
-    for p in phones_batch:
-        entries.append(
-            f"id={p['id']} site={p['site']} model={p['model']!r} "
-            f"storage={p['storage']} ram={p['ram']} variant_key={p['variant_key']}"
-        )
-
-    prompt = f"""You are cleaning a refurbished phone database with listings from multiple Indian stores (ControlZ, Cashify, Refit).
-
-Here are {len(phones_batch)} phone listings:
-
-{chr(10).join(entries)}
-
-Do TWO things:
-
-1. CLEAN MODEL NAMES: Fix any model names that contain store names, noise words, or are incorrect.
-   Common issues: "Apple iPhone 11 Controlz Refurbished" → "Apple iPhone 11"
-   Brand casing: iPhone, iPad, OnePlus, POCO, iQOO (not Iqoo or Poco)
-   Only fix if the name is genuinely wrong — don't change correct names.
-
-2. GROUP DUPLICATES: Find phones that are the SAME physical device sold by different stores.
-   Same phone = same model + same storage. Different storage = different phone.
-   Pro/Plus/Max variants are DIFFERENT phones — never group them together.
-   Assign the same canonical_key to duplicates. Use format: brand-model_storage
-   e.g. apple-iphone-11_64gb (lowercase, hyphens for spaces, underscore before storage)
-
-IMPORTANT for canonical_key:
-- If two or more phones are the same device from different stores, ALL of them must get the SAME canonical_key
-- Do not leave one store's entry with null and another with a key — set the key on ALL duplicates
-- canonical_key format: brand-model_storage e.g. apple-iphone-11_64gb, samsung-galaxy-s23_256gb
-
-Respond with ONLY a JSON array. Each item must have:
-- "id": the phone id (copy exactly as given, keep as number if number)
-- "model": corrected model name (or same if already correct)
-- "canonical_key": same canonical key for all duplicates of the same phone, null if no duplicate
-
-Example:
-[
-  {{"id": 833, "model": "Apple iPhone 11", "canonical_key": "apple-iphone-11_128gb"}},
-  {{"id": 778, "model": "Apple iPhone 11", "canonical_key": "apple-iphone-11_128gb"}},
-  {{"id": 901, "model": "Apple iPhone 13 Pro", "canonical_key": null}}
-]
-
-Return ONLY the JSON array, no explanation, no markdown."""
-
+def call_claude(prompt, max_tokens=2000):
+    """Call Claude API and return parsed JSON response."""
     headers = {
         "Content-Type": "application/json",
         "x-api-key": ANTHROPIC_KEY,
@@ -92,141 +45,286 @@ Return ONLY the JSON array, no explanation, no markdown."""
     }
     body = {
         "model": "claude-sonnet-4-20250514",
-        "max_tokens": 2000,
+        "max_tokens": max_tokens,
         "messages": [{"role": "user", "content": prompt}],
     }
-
     r = requests.post(CLAUDE_URL, headers=headers, json=body, timeout=60)
     if r.status_code != 200:
         print(f"  Claude API error {r.status_code}: {r.text[:200]}")
         return None
-
     text = r.json()["content"][0]["text"].strip()
-
-    # Strip markdown fences if present
     if text.startswith("```"):
         text = text.split("```")[1]
         if text.startswith("json"):
             text = text[4:]
     text = text.strip()
-
     try:
         return json.loads(text)
     except json.JSONDecodeError as e:
-        print(f"  JSON parse error: {e}")
-        print(f"  Response was: {text[:300]}")
+        print(f"  JSON parse error: {e}\n  Response: {text[:300]}")
         return None
 
 
-def apply_corrections(corrections, original_phones):
-    """Apply model name and canonical_key corrections to DB."""
-    # Build lookup of original phones by id
-    originals = {str(p["id"]): p for p in original_phones}
+# ─────────────────────────────────────────────
+# PASS 0 — Delete non-phones
+# ─────────────────────────────────────────────
 
-    updated_model = 0
-    updated_canonical = 0
+def pass0_delete_nonphones(phones):
+    """Ask Claude to identify non-phones and delete them from DB."""
+    print("\n── Pass 0: Identifying non-phones ──")
+    deleted = 0
 
-    for c in corrections:
-        pid = str(c.get("id", ""))
-        if not pid or pid not in originals:
+    for i in range(0, len(phones), BATCH_SIZE):
+        batch = phones[i:i + BATCH_SIZE]
+        entries = [f"id={p['id']} site={p['site']} model={p['model']} storage={p['storage']}"
+                   for p in batch]
+
+        prompt = f"""You are reviewing a refurbished phone database.
+
+Here are {len(batch)} products:
+
+{chr(10).join(entries)}
+
+Return a JSON array of IDs for products that are CLEARLY NOT smartphones. Only flag something if you are 100% certain it is not a phone — for example:
+- "Power Bank 20000mAh" — clearly not a phone
+- "Photography Kit" — clearly not a phone  
+- "USB Cable" — clearly not a phone
+- "Smart Watch" — clearly not a phone
+
+DO NOT flag phones you don't recognise. If uncertain, do NOT include the ID.
+If all products are phones (or you are unsure), return: []
+
+CRITICAL: Return ONLY a valid JSON array of integers. No text before or after. No explanation.
+Example response: [123, 456]
+Empty response: []"""
+
+        result = call_claude(prompt, max_tokens=500)
+        if result is None:
             continue
 
-        orig = originals[pid]
-        patch = {}
+        ids_to_delete = [int(x) for x in result if str(x).isdigit()]
+        if ids_to_delete:
+            for did in ids_to_delete:
+                try:
+                    sb.table("prices").delete().eq("phone_id", did).execute()
+                    sb.table("phones").delete().eq("id", did).execute()
+                    model = next((p['model'] for p in batch if p['id'] == did), did)
+                    print(f"  Deleted: id={did} ({model})")
+                    deleted += 1
+                except Exception as e:
+                    print(f"  Delete error for {did}: {e}")
 
-        # Model name changed?
-        new_model = c.get("model", "").strip()
-        if new_model and new_model != orig["model"]:
-            patch["model"] = new_model
-            # Also update name field
-            storage = orig.get("storage") or ""
-            patch["name"] = f"{new_model} {storage}".strip()
-            updated_model += 1
+        if i + BATCH_SIZE < len(phones):
+            time.sleep(0.5)
 
-        # Canonical key set?
-        new_canonical = c.get("canonical_key")
-        if new_canonical and new_canonical != orig.get("canonical_key"):
-            patch["canonical_key"] = new_canonical
-            updated_canonical += 1
+    print(f"Pass 0 complete: {deleted} non-phones deleted")
+    return deleted
 
-        if patch:
-            try:
-                # id column is integer in DB — cast back from string
-                db_id = int(pid) if str(pid).isdigit() else pid
-                result = sb.table("phones").update(patch).eq("id", db_id).execute()
-                if not result.data:
-                    print(f"  Warning: update returned no data for id={db_id}")
-            except Exception as e:
-                print(f"  DB update error for {pid}: {e}")
 
-    return updated_model, updated_canonical
+# ─────────────────────────────────────────────
+# PASS 1 — Clean model names
+# ─────────────────────────────────────────────
 
+def pass1_clean_names(phones):
+    """Ask Claude to clean model names — strip store names, noise words, fix casing."""
+    print("\n── Pass 1: Cleaning model names ──")
+    updated = 0
+
+    for i in range(0, len(phones), BATCH_SIZE):
+        batch = phones[i:i + BATCH_SIZE]
+        entries = [f"id={p['id']} site={p['site']} model={p['model']} storage={p['storage']}"
+                   for p in batch]
+
+        prompt = f"""You are cleaning model names in a refurbished phone database with listings from Indian stores (ControlZ, Cashify, Refit, Xtracover, SahiValue).
+
+Here are {len(batch)} phone listings:
+
+{chr(10).join(entries)}
+
+Clean the model names:
+- Remove store names: controlz, cashify, refit, xtracover, sahivalue
+- Remove noise words: Refurbished, Renewed, Pre-owned, Open Box, Certified, Special Series
+- Fix brand casing: iPhone (not Iphone), iPad, OnePlus, POCO, iQOO, Samsung, Google
+- Keep model numbers, variants (Pro, Plus, Max, Ultra, FE, Lite), and 5G/4G designations
+- Do NOT change correct names
+
+Return ONLY a JSON array. Each item:
+- "id": phone id (number)
+- "model": corrected name (same if already correct)
+
+Return ONLY the JSON array, no explanation."""
+
+        result = call_claude(prompt)
+        if not result:
+            print(f"  Batch {i//BATCH_SIZE + 1}: skipped")
+            continue
+
+        originals = {str(p["id"]): p for p in batch}
+        batch_updated = 0
+        for item in result:
+            pid = str(item.get("id", ""))
+            if pid not in originals:
+                continue
+            orig = originals[pid]
+            new_model = (item.get("model") or "").strip()
+            if new_model and new_model != orig["model"]:
+                storage = orig.get("storage") or ""
+                patch = {"model": new_model, "name": f"{new_model} {storage}".strip()}
+                try:
+                    sb.table("phones").update(patch).eq("id", int(pid)).execute()
+                    updated += 1
+                    batch_updated += 1
+                except Exception as e:
+                    if "23505" in str(e):
+                        # Duplicate exists with correct name — delete this stale row
+                        try:
+                            sb.table("prices").delete().eq("phone_id", int(pid)).execute()
+                            sb.table("phones").delete().eq("id", int(pid)).execute()
+                            print(f"  Merged duplicate: id={pid} ({orig['model']} -> {new_model})")
+                        except Exception as e2:
+                            print(f"  Merge error for {pid}: {e2}")
+                    else:
+                        print(f"  Update error for {pid}: {e}")
+
+        print(f"  Batch {i//BATCH_SIZE + 1}/{(len(phones)-1)//BATCH_SIZE + 1}: {batch_updated} names cleaned")
+        if i + BATCH_SIZE < len(phones):
+            time.sleep(0.5)
+
+    print(f"Pass 1 complete: {updated} model names cleaned")
+    return updated
+
+
+# ─────────────────────────────────────────────
+# PASS 2 — Set canonical keys for cross-store duplicates
+# ─────────────────────────────────────────────
+
+def pass2_canonical_keys(phones):
+    """Group phones by cleaned model+storage, ask Claude to confirm duplicates and set canonical keys."""
+    print("\n── Pass 2: Setting canonical keys ──")
+    import re
+    from collections import defaultdict
+
+    def rough_key(p):
+        """Group key using cleaned model + storage."""
+        m = re.sub(r"[^a-z0-9]", "", (p.get("model") or "").lower())
+        st = re.sub(r"[^a-z0-9]", "", (p.get("storage") or "").lower())
+        return m + "_" + st
+
+    # Group phones by rough key
+    groups = defaultdict(list)
+    for p in phones:
+        groups[rough_key(p)].append(p)
+
+    # Only process groups with phones from multiple stores (these need canonical keys)
+    multi_store_groups = {k: v for k, v in groups.items()
+                          if len(set(p["site"] for p in v)) > 1}
+
+    print(f"  Groups with multiple stores: {len(multi_store_groups)}")
+
+    # Pack into batches keeping same-model phones together
+    batches, current = [], []
+    for group in multi_store_groups.values():
+        if current and len(current) + len(group) > BATCH_SIZE:
+            batches.append(current)
+            current = []
+        if len(group) > BATCH_SIZE:
+            for i in range(0, len(group), BATCH_SIZE):
+                batches.append(group[i:i + BATCH_SIZE])
+        else:
+            current.extend(group)
+    if current:
+        batches.append(current)
+
+    updated = 0
+    for i, batch in enumerate(batches, 1):
+        entries = [f"id={p['id']} site={p['site']} model={p['model']} storage={p['storage']} ram={p['ram']}"
+                   for p in batch]
+
+        prompt = f"""You are merging duplicate phone listings from different refurbished phone stores.
+
+Here are {len(batch)} phone listings that may be duplicates across stores:
+
+{chr(10).join(entries)}
+
+Rules:
+- Same phone = same model + same storage capacity. Different storage = different phone.
+- Pro/Plus/Max/Ultra/FE variants are DIFFERENT phones — never group them together.
+- If two or more phones are the same device from different stores, give ALL of them the same canonical_key.
+- canonical_key format: brand-model_storage (lowercase, hyphens for spaces, underscore before storage)
+  Examples: apple-iphone-11_64gb, samsung-galaxy-s23_256gb, oneplus-nord-2t_128gb
+- If a phone has no duplicate in this batch, set canonical_key to null.
+- IMPORTANT: ALL phones in a duplicate group must get the same canonical_key — not just one.
+
+Return ONLY a JSON array. Each item:
+- "id": phone id (number, copy exactly)
+- "canonical_key": shared key for duplicates, null if no duplicate
+
+Return ONLY the JSON array, no explanation."""
+
+        result = call_claude(prompt)
+        if not result:
+            print(f"  Batch {i}/{len(batches)}: skipped")
+            continue
+
+        originals = {str(p["id"]): p for p in batch}
+
+        # Debug: show what Claude returned for first batch
+        if i == 1:
+            keys_set = [x for x in result if x.get("canonical_key")]
+            print(f"  Debug batch 1: {len(result)} items, {len(keys_set)} with canonical keys")
+            for x in keys_set[:3]:
+                pid_d = str(x["id"])
+                orig_key = originals.get(pid_d, {}).get("canonical_key")
+                new_key = x["canonical_key"]
+                match = new_key == orig_key
+                print(f"    id={x['id']} existing={orig_key} -> new={new_key} (skip={match})")
+        batch_updated = 0
+        for item in result:
+            pid = str(item.get("id", ""))
+            if pid not in originals:
+                continue
+            new_canonical = item.get("canonical_key")
+            if new_canonical and new_canonical != originals[pid].get("canonical_key"):
+                try:
+                    sb.table("phones").update({"canonical_key": new_canonical}).eq("id", int(pid)).execute()
+                    updated += 1
+                    batch_updated += 1
+                except Exception as e:
+                    print(f"  Update error for {pid}: {e}")
+
+        print(f"  Batch {i}/{len(batches)}: {batch_updated} canonical keys set")
+        if i < len(batches):
+            time.sleep(0.5)
+
+    print(f"Pass 2 complete: {updated} canonical keys set")
+    return updated
+
+
+# ─────────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────────
 
 def normalize():
     print("Fetching all phones from DB...")
     phones = fetch_phones()
     print(f"Total phones: {len(phones)}")
 
-    # Group by cleaned model name so same-model phones from different stores
-    # always appear in the same batch — essential for cross-store dedup.
-    from collections import defaultdict
-    import re as _re
-    from normalize import clean_model as _clean_model
+    # Pass 0: delete non-phones
+    deleted = pass0_delete_nonphones(phones)
+    if deleted:
+        phones = fetch_phones()
+        print(f"Phones remaining after cleanup: {len(phones)}")
 
-    def rough_model(p):
-        """Use clean_model from normalize.py — the single source of truth
-        for stripping noise. Storage appended to keep variants separate."""
-        model_key = _re.sub(r"[^a-z0-9]", "", _clean_model(p.get("model") or "").lower())
-        storage_key = _re.sub(r"[^a-z0-9]", "", (p.get("storage") or "").lower())
-        return model_key + "_" + storage_key
+    # Pass 1: clean model names
+    pass1_clean_names(phones)
 
-    # Group phones by rough model key
-    model_groups = defaultdict(list)
-    for p in phones:
-        model_groups[rough_model(p)].append(p)
+    # Re-fetch with cleaned names for pass 2
+    phones = fetch_phones()
 
-    # Pack groups into batches of BATCH_SIZE, keeping same-model phones together
-    batches, current_batch = [], []
-    for group in model_groups.values():
-        # If adding this group would exceed batch size and batch is non-empty, flush
-        if current_batch and len(current_batch) + len(group) > BATCH_SIZE:
-            batches.append(current_batch)
-            current_batch = []
-        # If a single group is larger than BATCH_SIZE, split it (rare)
-        if len(group) > BATCH_SIZE:
-            for i in range(0, len(group), BATCH_SIZE):
-                batches.append(group[i:i + BATCH_SIZE])
-        else:
-            current_batch.extend(group)
-    if current_batch:
-        batches.append(current_batch)
+    # Pass 2: set canonical keys
+    pass2_canonical_keys(phones)
 
-    print(f"Processing {len(batches)} batches (grouped by model) covering {len(phones)} phones\n")
-
-    total_model = 0
-    total_canonical = 0
-
-    for i, batch in enumerate(batches, 1):
-        print(f"Batch {i}/{len(batches)} ({len(batch)} phones)...")
-        corrections = ask_claude(batch)
-
-        if not corrections:
-            print(f"  Skipped (no response)")
-            continue
-
-        nm, nc = apply_corrections(corrections, batch)
-        total_model += nm
-        total_canonical += nc
-        print(f"  ✓ {nm} model names fixed, {nc} canonical keys set")
-
-        # Rate limiting — be nice to the API
-        if i < len(batches):
-            time.sleep(1)
-
-    print(f"\nDone.")
-    print(f"  Model names corrected: {total_model}")
-    print(f"  Canonical keys set:    {total_canonical}")
-    print(f"\nRun the website to see merged listings.")
+    print("\n✓ Normalization complete.")
 
 
 if __name__ == "__main__":

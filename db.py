@@ -1,12 +1,12 @@
-from dotenv import load_dotenv
-load_dotenv()
-
 """
 Database helper. Connects to Supabase and saves phones + price snapshots.
 All scrapers import from here.
 """
 import os
+from dotenv import load_dotenv
 from supabase import create_client, Client
+
+load_dotenv()
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
@@ -42,13 +42,36 @@ def save_phone(site, name, url, image_url, model, storage, ram, variant_key):
 
 
 def save_price(phone_id, price, availability="in_stock", condition="Premium Renewed",
-               rating=None, review_count=None, warranty_months=None):
+               rating=None, review_count=None, warranty_months=None, url=None):
     """Append a price snapshot (one per condition). Never overwrites; history accrues."""
     supabase.table("prices").insert({
         "phone_id": phone_id, "price": price, "availability": availability,
         "condition": condition, "rating": rating, "review_count": review_count,
-        "warranty_months": warranty_months,
+        "warranty_months": warranty_months, "url": url,
     }).execute()
+
+
+
+def mark_site_oos(site):
+    """Delete today's prices for this site before scraping.
+    Called at the start of each scraper run so stale in_stock prices are cleared.
+    Only phones found in the current scrape will have prices — others show as unavailable.
+    Keeps price history older than today intact for trend tracking.
+    """
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # Get all phone IDs for this site
+    phones = supabase.table("phones").select("id").eq("site", site).execute()
+    phone_ids = [p["id"] for p in (phones.data or [])]
+    if not phone_ids:
+        return 0
+    deleted = 0
+    for i in range(0, len(phone_ids), 100):
+        batch_ids = phone_ids[i:i+100]
+        for pid in batch_ids:
+            supabase.table("prices").delete().eq("phone_id", pid).gte("scraped_at", today).execute()
+            deleted += 1
+    return deleted
 
 
 # ---------- Image self-hosting (first sighting only) ----------

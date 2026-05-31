@@ -17,8 +17,8 @@ import json
 import time
 import requests
 from bs4 import BeautifulSoup
-from normalize import clean_model, normalize_storage, make_variant_key, parse_size_string, normalize_condition
-from db import save_phone, save_price, ensure_image
+from normalize import clean_model, normalize_storage, make_variant_key, parse_size_string, normalize_condition, parse_name_from_listing, is_phone
+from db import save_phone, save_price, ensure_image, mark_site_oos
 
 SITE = "sahivalue"
 BASE_URL = "https://www.sahivalue.com"
@@ -31,10 +31,32 @@ HEADERS = {"User-Agent": UA}
 
 
 def parse_storage_option(opt):
-    """Parse storage option string e.g. '12/256GB', '8/128GB', '256GB', '512GB'."""
+    """Parse storage option string from SahiValue variant options.
+    Handles: '12/256GB', '8/128GB', '256GB', '256', '128'
+    For slash format like '12/256GB': left=RAM, right=storage
+    For bare numbers like '256': treat as storage GB
+    """
     if not opt:
         return None, None
-    return parse_size_string(opt.replace("/", "|"))
+    opt = opt.strip()
+
+    # Slash format: "12/256GB" or "8/128 GB"
+    slash = re.search(r"^(\d+)\s*/\s*(\d+)\s*(GB|TB)?$", opt, re.I)
+    if slash:
+        ram_num = slash.group(1)
+        storage_num = slash.group(2)
+        unit = (slash.group(3) or "GB").upper()
+        return f"{ram_num}GB", normalize_storage(f"{storage_num}{unit}")
+
+    # Has GB/TB: "256GB", "512 GB", "1TB"
+    if re.search(r"\d+\s*(GB|TB)", opt, re.I):
+        return parse_size_string(opt)
+
+    # Bare number: "256", "128" — treat as storage GB
+    if re.match(r"^\d+$", opt):
+        return None, normalize_storage(f"{opt}GB")
+
+    return None, None
 
 
 def get_category_urls(cat_url):
@@ -150,7 +172,12 @@ def fetch_product_variants(prod_url):
         return None, []
 
     product_name = data.get("name", "")
-    model = clean_model(product_name)
+    if not is_phone(product_name, prod_url):
+        return product_name, []
+    # Parse model, ram, storage from product name first
+    model, name_ram, name_storage = parse_name_from_listing(product_name)
+    if not model:
+        model = clean_model(product_name)
 
     # Get first image from product level
     images = data.get("images", [])
@@ -193,9 +220,9 @@ def fetch_product_variants(prod_url):
         storage_opt = opt_values[1] if len(opt_values) > 1 else ""
         ram, storage = parse_storage_option(storage_opt)
 
-        # If no storage in options, try parsing from product name
+        # If no storage in options, use what we parsed from the product name
         if not storage:
-            _, ram, storage = _parse_name_storage(product_name)
+            ram, storage = name_ram, name_storage
 
         # Image: variant-level first, then product-level
         var_images = v.get("images", [])
@@ -205,10 +232,15 @@ def fetch_product_variants(prod_url):
             if vi:
                 img_url = f"https://cdn2.zohoecommerce.com{vi}/400x400?storefront_domain=www.sahivalue.com"
 
+        # Variant-specific URL — takes user directly to this condition/storage
+        variant_id = v.get("variant_id", "")
+        variant_url = f"{prod_url}?variant={variant_id}" if variant_id else prod_url
+
         results.append({
             "model": model, "ram": ram, "storage": storage,
             "condition": condition, "price": price,
-            "img_url": img_url, "url": prod_url,
+            "img_url": img_url, "url": variant_url,
+            "name": f"{model} {storage or ''}".strip(),
         })
 
     return model, results
@@ -237,6 +269,7 @@ def _parse_name_storage(raw):
 
 
 def scrape():
+    mark_site_oos("sahivalue")
     print("Collecting product URLs from listing...")
     url_map = get_listing_urls()
     print(f"Unique products: {len(url_map)}\n")
@@ -287,7 +320,7 @@ def scrape():
         )
         save_price(
             pid, o["price"], availability="in_stock",
-            condition=condition, rating=None, review_count=None,
+            condition=condition, rating=None, review_count=None, url=o["url"],
         )
         saved += 1
         print(f"  saved: {o['name']:40} [{condition:20}] ₹{o['price']:.0f}")

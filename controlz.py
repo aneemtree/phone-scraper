@@ -18,8 +18,8 @@ import json
 import time
 import requests
 from playwright.sync_api import sync_playwright
-from normalize import clean_model, normalize_storage, normalize_ram, make_variant_key, parse_size_string, normalize_condition
-from db import save_phone, save_price, ensure_image
+from normalize import clean_model, normalize_storage, normalize_ram, make_variant_key, parse_size_string, normalize_condition, is_phone
+from db import save_phone, save_price, ensure_image, mark_site_oos
 
 SITE = "controlz"
 LISTING_URL = "https://www.controlz.world/store"
@@ -47,7 +47,7 @@ def get_product_slugs():
         slug_val = m.group(1)
         if slug_val in seen:
             continue
-        if slug_val in SKIP_SLUGS or any(sk in slug_val for sk in SKIP_SLUGS):
+        if slug_val in SKIP_SLUGS or any(sk in slug_val for sk in SKIP_SLUGS) or not is_phone("", slug_val):
             continue
         seen.add(slug_val)
         products.append({"slug": slug_val, "title": slug_val})  # title read from product page
@@ -203,6 +203,7 @@ def scrape_product(page, slug):
 
 
 def scrape():
+    mark_site_oos("controlz")
     products = get_product_slugs()
     print(f"Found {len(products)} products to visit.")
     best = {}

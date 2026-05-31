@@ -20,8 +20,8 @@ import time
 import requests
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
-from normalize import clean_model, normalize_storage, normalize_ram, make_variant_key, parse_size_string, normalize_condition
-from db import save_phone, save_price, ensure_image
+from normalize import clean_model, normalize_storage, normalize_ram, make_variant_key, parse_size_string, normalize_condition, is_phone
+from db import save_phone, save_price, ensure_image, mark_site_oos
 
 SITE = "cashify"
 BASE_URL = "https://www.cashify.in"
@@ -151,18 +151,26 @@ def click_option(page, section_heading, option_text):
 def read_price(page):
     """Read the main product price from the page."""
     js = """() => {
-        // Price is in an h3 with class containing 'h3' near a rupee symbol
-        const els = Array.from(document.querySelectorAll('h3, h2, [class*="h3"]'));
-        for (const el of els) {
-            const t = el.innerText.trim();
-            if (/^\u20b9[\\d,]+$/.test(t)) return t;
+        // Primary: itemprop="price" — the canonical product price element
+        const priceEl = document.querySelector('[itemprop="price"]');
+        if (priceEl) {
+            const t = priceEl.innerText.trim();
+            if (/^\u20b9[\d,]+$/.test(t)) return t;
         }
-        // Fallback: find any element with a rupee price
+        // Fallback: h1 with text-primary-text-dark
+        const h1s = Array.from(document.querySelectorAll('.h1'));
+        for (const el of h1s) {
+            if (el.classList.contains('text-primary-text-dark')) {
+                const t = el.innerText.trim();
+                if (/^\u20b9[\d,]+$/.test(t)) return t;
+            }
+        }
+        // Last resort: any leaf element with rupee price 5+ digits
         const all = Array.from(document.querySelectorAll('*'));
         for (const el of all) {
             if (el.children.length === 0) {
                 const t = el.innerText.trim();
-                if (/^\u20b9[\\d,]{4,}$/.test(t)) return t;
+                if (/^\u20b9[\d,]{5,}$/.test(t)) return t;
             }
         }
         return null;
@@ -283,6 +291,7 @@ def scrape_product(page, slug, product_name, img_url, rating, review_count, warr
 
 
 def scrape():
+    mark_site_oos("cashify")
     with sync_playwright() as pw:
         # Step 1: capture token
         token, device_id = capture_token(pw)

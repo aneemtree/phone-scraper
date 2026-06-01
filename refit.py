@@ -104,6 +104,13 @@ def scrape():
         img_url = get_image(prod)
         warranty_months = get_warranty(prod)
 
+        # "Brand Box" listings are a separate product from the standard one with
+        # their own grades. We keep them in the SAME list (same variant_key/name,
+        # since clean_model strips "Brand Box") but tag the condition so they read
+        # as "Brand Box - Good", "Brand Box - Superb", etc. alongside the regular
+        # "Good"/"Superb".
+        is_brand_box = bool(re.search(r"brand\s*box", title, re.I))
+
         # Get rating from Judge.me embedded data — not available in products.json
         # Refit uses Judge.me; rating shown in listing HTML but not in API.
         # We'll skip rating for now and leave as None.
@@ -124,8 +131,9 @@ def scrape():
         grade_pos = opt_idx.get("grade", 1)
         size_pos = opt_idx.get("size")
 
-        # Group by (grade, size) → collect available prices
-        groups = {}  # (grade, size) → list of prices for available colors
+        # Group by (grade, size) → collect available (price, variant_id) so we can
+        # keep the lowest price AND link to that exact variant in the store.
+        groups = {}  # (grade, size) → list of (price, variant_id)
         for v in variants:
             if not v.get("available", False):
                 continue
@@ -139,7 +147,7 @@ def scrape():
             if not price or not grade or not size:
                 continue
             key = (grade, size)
-            groups.setdefault(key, []).append(price)
+            groups.setdefault(key, []).append((price, v.get("id")))
 
         if not groups:
             # No available variants — skip entirely
@@ -147,21 +155,25 @@ def scrape():
 
         model = clean_model(title)
 
-        for (grade, size), prices in groups.items():
+        for (grade, size), priced in groups.items():
             ram, storage = parse_size_string(size)
             variant_key = make_variant_key(model, storage, ram)
-            lowest_price = min(prices)
+            lowest_price, variant_id = min(priced, key=lambda pv: pv[0])
+            # Link to the exact lowest-price variant in the Shopify store.
+            variant_url = f"{url}?variant={variant_id}" if variant_id else url
+            # Tag Brand Box grades so they sit beside the regular grades.
+            grade_label = f"Brand Box - {grade}" if is_brand_box else grade
 
-            bkey = (variant_key, grade)
+            bkey = (variant_key, grade_label)
             if bkey not in best or lowest_price < best[bkey]["price"]:
                 best[bkey] = {
                     "model": model,
                     "storage": storage,
                     "ram": ram,
                     "variant_key": variant_key,
-                    "grade": grade,
+                    "grade": grade_label,
                     "price": lowest_price,
-                    "url": url,
+                    "url": variant_url,
                     "image_url": img_url,
                     "warranty_months": warranty_months,
                     "rating": rating,
@@ -192,6 +204,7 @@ def scrape():
             condition=grade, rating=o.get("rating"),
             review_count=o.get("review_count"),
             warranty_months=o.get("warranty_months"),
+            url=o["url"],
         )
         saved += 1
         print(f"  saved: {o['name']:35} [{grade:12}] ₹{o['price']:.0f}")

@@ -148,7 +148,7 @@ def parse_product_page(path):
     variant_pattern = (
         r'\{"condition":"([^"]+)","id":\d+,"sku":"[^"]*","name":"([^"]+)",'
         r'"color":"([^"]+)","rom":"[^"]*","price":(\d+),"strikeAmt":"[^"]*",'
-        r'"qty":\d+,[^}]*"storage":"([^"]+)",[^}]*"image":"([^"]*)"'
+        r'"qty":\d+,[^}]*"storage":"([^"]+)",[^}]*"image":"((?:[^"\\]|\\.)*)"'
     )
     matches = re.findall(variant_pattern, payload)
     if not matches:

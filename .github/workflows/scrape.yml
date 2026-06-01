@@ -4,7 +4,9 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: "0 2 * * *"
+    # Times in UTC. IST = UTC+5:30.
+    - cron: "30 0 * * *"   # 06:00 IST
+    - cron: "30 9 * * *"   # 15:00 IST
   workflow_dispatch:
 
 permissions:

@@ -90,6 +90,9 @@ def check_conditions_playwright(url):
             for btn in cond_buttons:
                 try:
                     condition_text = btn.inner_text().strip()
+                    # Skip the lowest "As-Is" grade — we don't list these.
+                    if re.sub(r"[^a-z]", "", condition_text.lower()) == "asis":
+                        continue
                     btn.click()
                     page.wait_for_timeout(800)
 

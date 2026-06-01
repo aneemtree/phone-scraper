@@ -142,7 +142,7 @@ def parse_product_page(path):
     payload = "".join(json.loads(c) for c in chunks if c.startswith('"'))
 
     variant_pattern = (
-        r'\{"condition":"([^"]+)","id":\d+,"sku":"[^"]*","name":"([^"]+)",'
+        r'\{"condition":"([^"]+)","id":(\d+),"sku":"[^"]*","name":"([^"]+)",'
         r'"color":"([^"]+)","rom":"[^"]*","price":(\d+),"strikeAmt":"[^"]*",'
         r'"qty":(\d+),[^}]*"storage":"([^"]+)",[^}]*"image":"((?:[^"\\]|\\.)*)"'
     )
@@ -150,14 +150,20 @@ def parse_product_page(path):
     if not matches:
         return []
 
-    model = clean_model(matches[0][1])
+    model = clean_model(matches[0][2])
     if not model or not is_phone(model):
         return []
 
-    # Get product image (group 7 = image of the first variant)
+    # The trailing number in an Ovantica URL is a per-VARIANT id (it changes as
+    # you pick storage/condition/color), not a separate product page. Each variant
+    # object carries its own "id", so we deep-link to that exact variant by
+    # swapping the slug's trailing id for the chosen variant's id.
+    base_slug = re.sub(r"/\d+/?$", "", path)
+
+    # Get product image (group 8 = image of the first variant)
     prod_img = None
     try:
-        clean = matches[0][6].replace('\\"', '"').replace("\\'", "'")
+        clean = matches[0][7].replace('\\"', '"').replace("\\'", "'")
         imgs = json.loads(clean)
         if imgs:
             prod_img = CDN + imgs[0]
@@ -179,8 +185,8 @@ def parse_product_page(path):
     # — it was picking up EMI/strike values, making every price wrong.) For each
     # (condition, storage) keep the LOWEST price across colors, per the price rule,
     # and only consider variants the payload marks in stock (qty > 0).
-    variants_by_key = {}  # (cond_key, storage) -> {price, storage, condition, image_raw}
-    for condition, name, color, price, qty, storage, image_raw in matches:
+    variants_by_key = {}  # (cond_key, storage) -> {price, storage, condition, image_raw, vid}
+    for condition, vid, name, color, price, qty, storage, image_raw in matches:
         if int(qty) <= 0:
             continue
         # Skip the lowest "As-Is" grade — we don't list these.
@@ -192,7 +198,7 @@ def parse_product_page(path):
         if cur is None or price < cur["price"]:
             variants_by_key[key] = {
                 "price": price, "storage": storage,
-                "condition": condition, "image_raw": image_raw,
+                "condition": condition, "image_raw": image_raw, "vid": vid,
             }
 
     # Use Playwright to confirm which CONDITIONS are actually purchasable on the
@@ -215,13 +221,17 @@ def parse_product_page(path):
         except Exception:
             pass
 
+        norm_storage = normalize_storage(storage)
+        # Deep-link to this exact variant via its id in the slug's trailing slot.
+        variant_url = f"{BASE_URL}{base_slug}/{data['vid']}" if data.get("vid") else url
+
         results.append({
             "model": model,
-            "storage": normalize_storage(storage),
+            "storage": norm_storage,
             "condition": normalize_condition(data["condition"]),
             "color": "",
             "price": data["price"],
-            "url": url,
+            "url": variant_url,
             "img_url": img_url,
             "rating": rating,
             "review_count": review_count,

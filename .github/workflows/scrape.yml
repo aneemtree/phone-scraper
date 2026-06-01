@@ -1,8 +1,6 @@
 name: Scrape phone prices
 
 on:
-  push:
-    branches: [main]
   schedule:
     # Times in UTC. IST = UTC+5:30.
     - cron: "30 0 * * *"   # 06:00 IST

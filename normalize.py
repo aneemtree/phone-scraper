@@ -235,14 +235,24 @@ def clean_model(title: str) -> str:
     t = re.sub(r"\b(refurbished|renewed|pre-?owned|open\s*box|certified|certified refurbished)\b", " ", t, flags=re.I)
     t = re.sub(r"^buy\s+", "", t, flags=re.I)  # strip leading "Buy " prefix
 
-    # Normalize brand names
-    t = re.sub(r"^Galaxy\s", "Samsung Galaxy ", t)           # Galaxy S23 → Samsung Galaxy S23
-    t = re.sub(r"^Moto\s", "Motorola Moto ", t)              # Moto G84 → Motorola Moto G84
-    t = re.sub(r"^Motorola\s+Motorola\s+", "Motorola ", t)  # prevent double Motorola
-    t = re.sub(r"^iPhone\s", "Apple iPhone ", t)             # iPhone 15 → Apple iPhone 15
-    t = re.sub(r"^Redmi\s", "Xiaomi Redmi ", t)              # Redmi Note 12 → Xiaomi Redmi Note 12
-    t = re.sub(r"^Apple\s+Apple\s+", "Apple ", t)           # prevent double Apple
-    t = re.sub(r"^Xiaomi\s+Xiaomi\s+", "Xiaomi ", t)        # prevent double Xiaomi
+    # Normalize iPhone/iPad casing EARLY so later passes (model-number stripping,
+    # brand prefixing) see a canonical "iPhone"/"iPad" token. Without this, an
+    # uppercase "IPHONE" gets eaten by the model-number noise regex below and a
+    # lowercase "iphone" misses the brand-prefix step, producing a stray "iPhone"
+    # brand that splits the Apple filter into "Apple" + "iPhone".
+    t = re.sub(r"\biphone\b", "iPhone", t, flags=re.I)
+    t = re.sub(r"\bipad\b", "iPad", t, flags=re.I)
+
+    # Normalize brand names. Case-insensitive and anchored to the start so every
+    # variant collapses to a single canonical brand prefix (one filter per brand).
+    t = re.sub(r"^Galaxy\s", "Samsung Galaxy ", t, flags=re.I)   # Galaxy S23 → Samsung Galaxy S23
+    t = re.sub(r"^Moto\s", "Motorola Moto ", t, flags=re.I)      # Moto G84 → Motorola Moto G84
+    t = re.sub(r"^Motorola\s+Motorola\s+", "Motorola ", t, flags=re.I)  # prevent double Motorola
+    t = re.sub(r"^iPhone\s", "Apple iPhone ", t)                 # iPhone 15 → Apple iPhone 15
+    t = re.sub(r"^iPad\s", "Apple iPad ", t)                     # iPad Air → Apple iPad Air
+    t = re.sub(r"^Redmi\s", "Xiaomi Redmi ", t, flags=re.I)      # Redmi Note 12 → Xiaomi Redmi Note 12
+    t = re.sub(r"^Apple\s+Apple\s+", "Apple ", t, flags=re.I)    # prevent double Apple
+    t = re.sub(r"^Xiaomi\s+Xiaomi\s+", "Xiaomi ", t, flags=re.I) # prevent double Xiaomi
     t = re.sub(r"\bunbox(?:ed)?\b", " ", t, flags=re.I)  # strip unboxed/unbox
     t = re.sub(r"[/\\|]+$", "", t).strip()  # strip trailing slashes/pipes
     t = re.sub(r"\b(controlz|cashify|refit|xtracover|croma)\b", " ", t, flags=re.I)

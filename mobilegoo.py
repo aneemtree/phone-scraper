@@ -19,7 +19,7 @@ Run with: python3 mobilegoo.py
 import re
 import time
 import requests
-from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone, parse_size_string
+from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone, parse_size_string, shopify_option_index
 from db import save_phone, save_price, ensure_image, mark_site_oos
 
 SITE = "mobilegoo"
@@ -94,6 +94,13 @@ def scrape():
                     src = "https:" + src
                 prod_img = src or None
 
+            # Resolve which option slot holds storage vs grade by NAME (positions
+            # vary per store/product). Fall back to MobileGoo's usual layout
+            # (storage=option2, grade=option3) when names don't identify a role.
+            opt_idx = shopify_option_index(prod)
+            storage_pos = opt_idx.get("size", 2)
+            cond_pos = opt_idx.get("grade", 3)
+
             for v in prod.get("variants", []):
                 if not v.get("available", False):
                     continue
@@ -102,8 +109,8 @@ def scrape():
                 if not price:
                     continue
 
-                storage_raw = v.get("option2", "") or ""
-                condition_raw = v.get("option3", "") or ""
+                storage_raw = v.get(f"option{storage_pos}", "") or ""
+                condition_raw = v.get(f"option{cond_pos}", "") or ""
 
                 # Parse storage — option2 can be "128GB" or "4GB-64GB" (RAM-Storage)
                 ram, storage = parse_size_string(storage_raw.replace("-", "|"))

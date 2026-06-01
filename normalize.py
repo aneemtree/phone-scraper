@@ -350,3 +350,37 @@ def make_variant_key(model: str, storage: str | None, ram: str | None = None) ->
     if storage:
         parts.append(re.sub(r"[^a-z0-9]+", "", storage.lower()))
     return "_".join(parts)
+
+
+# Keyword → semantic role for matching Shopify variant option names. Shopify
+# stores variant attributes in option1/2/3, but the *position* of each attribute
+# varies per store/product. Mapping by the option's NAME (from prod["options"])
+# instead of a hardcoded position prevents storage/grade getting read from the
+# wrong slot — which otherwise collapses every storage into one variant_key.
+_OPTION_ROLE_KEYWORDS = {
+    "grade": ("grade", "condition", "quality"),
+    "size": ("storage", "size", "memory", "rom", "capacity", "variant", "ram"),
+    "color": ("color", "colour"),
+}
+
+
+def shopify_option_index(product: dict) -> dict:
+    """Return {role: position} mapping for a Shopify product's options.
+
+    role is one of "grade" | "size" | "color"; position is the 1-based index
+    used to read v["option{position}"]. Roles with no matching option name are
+    omitted, so callers should fall back to their known default positions.
+    """
+    idx = {}
+    for opt in product.get("options", []) or []:
+        name = (opt.get("name") or "").strip().lower()
+        pos = opt.get("position")
+        if not name or not pos:
+            continue
+        for role, keywords in _OPTION_ROLE_KEYWORDS.items():
+            if role in idx:
+                continue
+            if any(k in name for k in keywords):
+                idx[role] = pos
+                break
+    return idx

@@ -22,7 +22,7 @@ Run with: python3 refit.py
 import re
 import time
 import requests
-from normalize import clean_model, normalize_storage, make_variant_key, parse_size_string, normalize_condition, is_phone
+from normalize import clean_model, normalize_storage, make_variant_key, parse_size_string, normalize_condition, is_phone, shopify_option_index
 from db import save_phone, save_price, ensure_image, mark_site_oos
 
 SITE = "refit"
@@ -117,13 +117,23 @@ def scrape():
         if not any(v.get("available", False) for v in variants):
             continue
 
+        # Resolve which option slot holds grade vs size by NAME (positions vary
+        # per store/product). Fall back to Refit's usual layout (grade=option1,
+        # size=option3 or option2) when the option name doesn't identify a role.
+        opt_idx = shopify_option_index(prod)
+        grade_pos = opt_idx.get("grade", 1)
+        size_pos = opt_idx.get("size")
+
         # Group by (grade, size) → collect available prices
         groups = {}  # (grade, size) → list of prices for available colors
         for v in variants:
             if not v.get("available", False):
                 continue
-            grade = normalize_condition((v.get("option1") or "").strip())
-            size = (v.get("option3") or v.get("option2") or "").strip()
+            grade = normalize_condition((v.get(f"option{grade_pos}") or "").strip())
+            if size_pos:
+                size = (v.get(f"option{size_pos}") or "").strip()
+            else:
+                size = (v.get("option3") or v.get("option2") or "").strip()
             price_paise = v.get("price", 0)
             price = float(price_paise) if price_paise else None
             if not price or not grade or not size:

@@ -74,7 +74,8 @@ def get_product_urls():
 
 def check_conditions_playwright(url):
     """Use Playwright to click each condition button and check availability.
-    Returns list of (condition, storage, price) tuples that are in stock.
+    Returns a list of {"condition": <text>} dicts for conditions that are in
+    stock (Add to Cart present). Price/storage come from the RSC payload.
     """
     results = []
     with sync_playwright() as pw:
@@ -90,26 +91,21 @@ def check_conditions_playwright(url):
             for btn in cond_buttons:
                 try:
                     condition_text = btn.inner_text().strip()
+                    # Skip the lowest "As-Is" grade — we don't list these.
+                    if re.sub(r"[^a-z]", "", condition_text.lower()) == "asis":
+                        continue
                     btn.click()
                     page.wait_for_timeout(800)
 
-                    # Check if add to cart button is present
+                    # In stock if the Add to Cart button is present for this
+                    # condition. Price is NOT read here — it comes from the RSC
+                    # payload, which is authoritative; the rendered price element
+                    # was unreliable (EMI/strike values).
                     has_cart = page.locator("[data-testid='button-add-to-cart']").count() > 0
                     if not has_cart:
                         continue
 
-                    # Get current price
-                    price_el = page.locator("[data-testid^='price-']").first
-                    price_text = price_el.inner_text().strip() if price_el.count() > 0 else ""
-                    price_digits = "".join(c for c in price_text if c.isdigit())
-                    if not price_digits:
-                        continue
-                    price = float(price_digits)
-
-                    results.append({
-                        "condition": condition_text,
-                        "price": price,
-                    })
+                    results.append({"condition": condition_text})
                 except Exception:
                     continue
         except Exception as e:
@@ -148,7 +144,7 @@ def parse_product_page(path):
     variant_pattern = (
         r'\{"condition":"([^"]+)","id":\d+,"sku":"[^"]*","name":"([^"]+)",'
         r'"color":"([^"]+)","rom":"[^"]*","price":(\d+),"strikeAmt":"[^"]*",'
-        r'"qty":\d+,[^}]*"storage":"([^"]+)",[^}]*"image":"([^"]*)"'
+        r'"qty":(\d+),[^}]*"storage":"([^"]+)",[^}]*"image":"((?:[^"\\]|\\.)*)"'
     )
     matches = re.findall(variant_pattern, payload)
     if not matches:
@@ -158,10 +154,10 @@ def parse_product_page(path):
     if not model or not is_phone(model):
         return []
 
-    # Get product image
+    # Get product image (group 7 = image of the first variant)
     prod_img = None
     try:
-        clean = matches[0][5].replace('\\"', '"').replace("\\'", "'")
+        clean = matches[0][6].replace('\\"', '"').replace("\\'", "'")
         imgs = json.loads(clean)
         if imgs:
             prod_img = CDN + imgs[0]
@@ -178,32 +174,41 @@ def parse_product_page(path):
         except (ValueError, TypeError):
             pass
 
-    # Build storage/price lookup from payload variants
-    storage_by_condition = {}
-    for condition, name, color, price, storage, image_raw in matches:
-        cond_key = condition.lower()
-        if cond_key not in storage_by_condition:
-            storage_by_condition[cond_key] = {
-                "storage": storage, "price": float(price), "image_raw": image_raw
+    # Build per-(condition, storage) variants straight from the payload, which
+    # carries the AUTHORITATIVE price. (The rendered price element is unreliable
+    # — it was picking up EMI/strike values, making every price wrong.) For each
+    # (condition, storage) keep the LOWEST price across colors, per the price rule,
+    # and only consider variants the payload marks in stock (qty > 0).
+    variants_by_key = {}  # (cond_key, storage) -> {price, storage, condition, image_raw}
+    for condition, name, color, price, qty, storage, image_raw in matches:
+        if int(qty) <= 0:
+            continue
+        # Skip the lowest "As-Is" grade — we don't list these.
+        if re.sub(r"[^a-z]", "", condition.lower()) == "asis":
+            continue
+        price = float(price)
+        key = (condition.lower(), storage)
+        cur = variants_by_key.get(key)
+        if cur is None or price < cur["price"]:
+            variants_by_key[key] = {
+                "price": price, "storage": storage,
+                "condition": condition, "image_raw": image_raw,
             }
 
-    # Use Playwright to check which conditions are actually in stock
+    # Use Playwright to confirm which CONDITIONS are actually purchasable on the
+    # rendered page (availability source of truth). If it returns nothing (page
+    # structure changed), fall back to the payload's qty>0 signal alone.
     in_stock_conditions = check_conditions_playwright(url)
+    available_conds = {c["condition"].lower() for c in in_stock_conditions}
 
     results = []
-    for item in in_stock_conditions:
-        cond_text = item["condition"]
-        price = item["price"]
-        cond_key = cond_text.lower()
-
-        # Get storage for this condition from payload
-        payload_data = storage_by_condition.get(cond_key, {})
-        storage = payload_data.get("storage", "")
-        image_raw = payload_data.get("image_raw", "")
+    for (cond_key, storage), data in variants_by_key.items():
+        if available_conds and cond_key not in available_conds:
+            continue
 
         img_url = prod_img
         try:
-            clean = image_raw.replace('\\"', '"').replace("\\'", "'")
+            clean = data["image_raw"].replace('\\"', '"').replace("\\'", "'")
             imgs = json.loads(clean)
             if imgs:
                 img_url = CDN + imgs[0]
@@ -213,9 +218,9 @@ def parse_product_page(path):
         results.append({
             "model": model,
             "storage": normalize_storage(storage),
-            "condition": normalize_condition(cond_text),
+            "condition": normalize_condition(data["condition"]),
             "color": "",
-            "price": price,
+            "price": data["price"],
             "url": url,
             "img_url": img_url,
             "rating": rating,

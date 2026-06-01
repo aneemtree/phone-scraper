@@ -1,0 +1,47 @@
+name: Scrape single site
+
+# Manual-only: pick one scraper to run on its own (handy for testing a fix
+# without re-running the whole catalog).
+on:
+  workflow_dispatch:
+    inputs:
+      scraper:
+        description: "Which scraper to run"
+        required: true
+        default: "ovantica"
+        type: choice
+        options:
+          - cashify
+          - controlz
+          - refit
+          - xtracover
+          - ovantica
+          - mobilegoo
+          - sahivalue
+
+permissions:
+  contents: read
+
+jobs:
+  scrape-one:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Playwright browser
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run ${{ inputs.scraper }} scraper
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python ${{ inputs.scraper }}.py

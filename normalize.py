@@ -136,6 +136,37 @@ PHONE_BRANDS = [
     "infinix", "tecno", "lava", "micromax", "mi",
 ]
 
+# Maps a leading sub-brand/alias token (matched case-insensitively at the START
+# of the model name) to its canonical "Parent Sub" prefix. This guarantees the
+# brand filter never splits — e.g. "Pixel 7", "GOOGLE PIXEL 7" and "Google Pixel
+# 7" all collapse to "Google Pixel 7" so they share the single "Google" chip
+# instead of fragmenting into "Pixel" + "Google". Order matters: longer/more
+# specific tokens must come before shorter ones (e.g. "redmi" before "mi").
+SUB_BRAND_PREFIX = [
+    ("iphone", "Apple iPhone"),
+    ("ipad", "Apple iPad"),
+    ("galaxy", "Samsung Galaxy"),
+    ("moto", "Motorola Moto"),
+    ("redmi", "Xiaomi Redmi"),
+    ("poco", "POCO"),
+    ("pixel", "Google Pixel"),
+    ("narzo", "Realme Narzo"),
+    ("nord", "OnePlus Nord"),
+    ("mi", "Xiaomi Mi"),
+]
+
+# Canonical casing for standalone parent-brand words, applied as a final pass so
+# the brand chip reads consistently regardless of how a store cased the title.
+BRAND_CASE = {
+    "apple": "Apple", "samsung": "Samsung", "oneplus": "OnePlus",
+    "oppo": "OPPO", "vivo": "Vivo", "realme": "Realme", "xiaomi": "Xiaomi",
+    "poco": "POCO", "iqoo": "iQOO", "motorola": "Motorola", "nokia": "Nokia",
+    "google": "Google", "nothing": "Nothing", "asus": "ASUS", "lg": "LG",
+    "huawei": "Huawei", "honor": "Honor", "sony": "Sony", "infinix": "Infinix",
+    "tecno": "Tecno", "lava": "Lava", "micromax": "Micromax",
+    "iphone": "iPhone", "ipad": "iPad",
+}
+
 def is_phone(name: str, slug: str = "") -> bool:
     """Return True if the product name/slug looks like a phone, False if accessory/non-phone."""
     text = (name + " " + slug).lower()
@@ -235,14 +266,35 @@ def clean_model(title: str) -> str:
     t = re.sub(r"\b(refurbished|renewed|pre-?owned|open\s*box|certified|certified refurbished)\b", " ", t, flags=re.I)
     t = re.sub(r"^buy\s+", "", t, flags=re.I)  # strip leading "Buy " prefix
 
-    # Normalize brand names
-    t = re.sub(r"^Galaxy\s", "Samsung Galaxy ", t)           # Galaxy S23 → Samsung Galaxy S23
-    t = re.sub(r"^Moto\s", "Motorola Moto ", t)              # Moto G84 → Motorola Moto G84
-    t = re.sub(r"^Motorola\s+Motorola\s+", "Motorola ", t)  # prevent double Motorola
-    t = re.sub(r"^iPhone\s", "Apple iPhone ", t)             # iPhone 15 → Apple iPhone 15
-    t = re.sub(r"^Redmi\s", "Xiaomi Redmi ", t)              # Redmi Note 12 → Xiaomi Redmi Note 12
-    t = re.sub(r"^Apple\s+Apple\s+", "Apple ", t)           # prevent double Apple
-    t = re.sub(r"^Xiaomi\s+Xiaomi\s+", "Xiaomi ", t)        # prevent double Xiaomi
+    # Normalize iPhone/iPad casing EARLY so later passes (model-number stripping,
+    # brand prefixing) see a canonical "iPhone"/"iPad" token. Without this, an
+    # uppercase "IPHONE" gets eaten by the model-number noise regex below and a
+    # lowercase "iphone" misses the brand-prefix step, producing a stray "iPhone"
+    # brand that splits the Apple filter into "Apple" + "iPhone".
+    t = re.sub(r"\biphone\b", "iPhone", t, flags=re.I)
+    t = re.sub(r"\bipad\b", "iPad", t, flags=re.I)
+
+    # Canonicalize brand-word casing EARLY too. An all-caps brand like "GOOGLE"
+    # or sub-brand like "GALAXY"/"REDMI" would otherwise be deleted by the
+    # model-number noise regex below; cased to mixed-case it's safe and stays in
+    # the model name (so "SAMSUNG GALAXY S23" keeps "Galaxy" and matches the key
+    # "samsung-galaxy-s23" from other stores).
+    for token, cased in BRAND_CASE.items():
+        t = re.sub(rf"\b{token}\b", cased, t, flags=re.I)
+    for _token, _prefix in SUB_BRAND_PREFIX:
+        _word = _prefix.split(" ")[-1]  # canonical-cased sub-brand word, e.g. "Galaxy"
+        t = re.sub(rf"\b{re.escape(_word)}\b", _word, t, flags=re.I)
+
+    # Normalize brand names. For each sub-brand/alias, anchor to the START and
+    # match case-insensitively so every variant collapses to one canonical brand
+    # prefix (one filter per brand). The "parent already present" guard skips the
+    # rewrite when the canonical parent is already the leading word, preventing
+    # doubles like "Samsung Samsung Galaxy" or "Xiaomi Xiaomi Redmi".
+    for token, prefix in SUB_BRAND_PREFIX:
+        parent = prefix.split(" ", 1)[0]  # e.g. "Samsung" from "Samsung Galaxy"
+        if re.match(rf"^{re.escape(parent)}\s", t, flags=re.I):
+            continue  # already starts with the canonical parent brand
+        t = re.sub(rf"^{token}\s", prefix + " ", t, flags=re.I)
     t = re.sub(r"\bunbox(?:ed)?\b", " ", t, flags=re.I)  # strip unboxed/unbox
     t = re.sub(r"[/\\|]+$", "", t).strip()  # strip trailing slashes/pipes
     t = re.sub(r"\b(controlz|cashify|refit|xtracover|croma)\b", " ", t, flags=re.I)
@@ -281,12 +333,10 @@ def clean_model(title: str) -> str:
         else:
             words.append(w[:1].upper() + w[1:].lower() if w else w)
     t = " ".join(words)
-    # Apply brand casing AFTER title-casing so they aren't overwritten
-    t = re.sub(r"\biphone\b", "iPhone", t, flags=re.I)
-    t = re.sub(r"\bipad\b", "iPad", t, flags=re.I)
-    t = re.sub(r"\boneplus\b", "OnePlus", t, flags=re.I)
-    t = re.sub(r"\bpoco\b", "POCO", t, flags=re.I)
-    t = re.sub(r"\biqoo\b", "iQOO", t, flags=re.I)
+    # Apply canonical brand casing AFTER title-casing so brand words aren't
+    # overwritten (e.g. "Poco" -> "POCO", "Iqoo" -> "iQOO", "Oppo" -> "OPPO").
+    for token, cased in BRAND_CASE.items():
+        t = re.sub(rf"\b{token}\b", cased, t, flags=re.I)
     return t
 
 
@@ -300,3 +350,37 @@ def make_variant_key(model: str, storage: str | None, ram: str | None = None) ->
     if storage:
         parts.append(re.sub(r"[^a-z0-9]+", "", storage.lower()))
     return "_".join(parts)
+
+
+# Keyword → semantic role for matching Shopify variant option names. Shopify
+# stores variant attributes in option1/2/3, but the *position* of each attribute
+# varies per store/product. Mapping by the option's NAME (from prod["options"])
+# instead of a hardcoded position prevents storage/grade getting read from the
+# wrong slot — which otherwise collapses every storage into one variant_key.
+_OPTION_ROLE_KEYWORDS = {
+    "grade": ("grade", "condition", "quality"),
+    "size": ("storage", "size", "memory", "rom", "capacity", "variant", "ram"),
+    "color": ("color", "colour"),
+}
+
+
+def shopify_option_index(product: dict) -> dict:
+    """Return {role: position} mapping for a Shopify product's options.
+
+    role is one of "grade" | "size" | "color"; position is the 1-based index
+    used to read v["option{position}"]. Roles with no matching option name are
+    omitted, so callers should fall back to their known default positions.
+    """
+    idx = {}
+    for opt in product.get("options", []) or []:
+        name = (opt.get("name") or "").strip().lower()
+        pos = opt.get("position")
+        if not name or not pos:
+            continue
+        for role, keywords in _OPTION_ROLE_KEYWORDS.items():
+            if role in idx:
+                continue
+            if any(k in name for k in keywords):
+                idx[role] = pos
+                break
+    return idx

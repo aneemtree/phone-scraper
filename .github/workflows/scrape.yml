@@ -4,7 +4,9 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: "0 2 * * *"
+    # Times in UTC. IST = UTC+5:30.
+    - cron: "30 0 * * *"   # 06:00 IST
+    - cron: "30 9 * * *"   # 15:00 IST
   workflow_dispatch:
 
 permissions:
@@ -53,6 +55,24 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python xtracover.py
+
+      - name: Run Ovantica scraper
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python ovantica.py
+
+      - name: Run Mobilegoo scraper
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python mobilegoo.py
+
+      - name: Run Sahivalue scraper
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python sahivalue.py
 
       - name: AI normalization (clean names + merge duplicates)
         env:

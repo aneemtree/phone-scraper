@@ -179,9 +179,32 @@ def read_price(page):
 
 
 
+def buy_state(page):
+    """Return True only if the currently-selected variant is actually buyable.
+    Cashify shows a "Buy Now"/"Add to Cart" button when in stock and a
+    "Notify Me!" button when sold out (the price element can render in BOTH
+    states), so the button — not the price — is the availability source of truth."""
+    js = """() => {
+        const txt = Array.from(document.querySelectorAll('button'))
+            .map(b => (b.innerText || '').trim().toLowerCase()).join(' | ');
+        return {
+            in_stock: /buy now|add to cart/.test(txt),
+            notify: /notify me/.test(txt),
+        };
+    }"""
+    s = page.evaluate(js)
+    return bool(s["in_stock"]) and not s["notify"]
+
+
 def try_find_available_price(page):
-    """Click through ALL available colors for the current condition+storage,
-    read the price for each, and return the LOWEST price found (or None)."""
+    """Click through ALL available colors for the current condition+storage. For
+    each color that is actually in stock (buyable), read the price; return the
+    LOWEST in-stock price together with the variant URL it was found at, as
+    (price, url). Returns (None, None) when nothing is in stock.
+
+    page.url carries the per-variant id for the current selection — Cashify
+    deep-links each variant (e.g. .../renewed-apple-iphone-12/93619), exactly
+    like Ovantica — so it doubles as the variant-specific offer link."""
     js_colors = """() => {
         const swatches = Array.from(document.querySelectorAll(
             '.rounded-full[style*="cursor: pointer"]'
@@ -205,19 +228,27 @@ def try_find_available_price(page):
     colors = page.evaluate(js_colors)
     available_colors = [c for c in colors if c["available"]]
 
+    best_price, best_url = None, None
     if not available_colors:
-        # No color swatches — just read current price
-        return parse_price(read_price(page))
+        # No color swatches — read the current selection only if it's buyable.
+        if buy_state(page):
+            p = parse_price(read_price(page))
+            if p is not None:
+                best_price, best_url = p, page.url
+        return best_price, best_url
 
-    prices = []
     for color in available_colors:
         page.evaluate(js_click, color["index"])
         page.wait_for_timeout(400)
-        price = parse_price(read_price(page))
-        if price:
-            prices.append(price)
+        # Skip colors that are sold out (Notify Me, no buy button) even if a
+        # price still renders — that's the bug where OOS phones got saved.
+        if not buy_state(page):
+            continue
+        p = parse_price(read_price(page))
+        if p is not None and (best_price is None or p < best_price):
+            best_price, best_url = p, page.url
 
-    return min(prices) if prices else None
+    return best_price, best_url
 
 def scrape_product(page, slug, product_name, img_url, rating, review_count, warranty_months):
     """Visit a product page and scrape per-condition, per-storage prices."""
@@ -232,12 +263,12 @@ def scrape_product(page, slug, product_name, img_url, rating, review_count, warr
     results = []
     conditions = get_option_divs(page, "Condition")
     if not conditions:
-        # No condition selector — try to read a single price
-        price = parse_price(read_price(page))
-        if price:
+        # No condition selector — read a single price only if it's buyable.
+        price, vurl = try_find_available_price(page)
+        if price is not None:
             results.append({
                 "condition": "Refurbished", "storage": None, "ram": None,
-                "price": price, "url": url,
+                "price": price, "url": vurl,
             })
         return url, results
 
@@ -256,12 +287,12 @@ def scrape_product(page, slug, product_name, img_url, rating, review_count, warr
         available_storages = [s for s in storages if s["available"]] if storages else []
 
         if not available_storages:
-            # No storage selector — read single price
-            price = parse_price(read_price(page))
-            if price:
+            # No storage selector — read single price (gated on stock + variant URL)
+            price, vurl = try_find_available_price(page)
+            if price is not None:
                 results.append({
-                    "condition": cond_text, "storage": None, "ram": None,
-                    "price": price, "url": url,
+                    "condition": normalize_condition(cond_text), "storage": None, "ram": None,
+                    "price": price, "url": vurl,
                 })
             continue
 
@@ -270,8 +301,9 @@ def scrape_product(page, slug, product_name, img_url, rating, review_count, warr
             click_option(page, "Storage", stor_text)
             page.wait_for_timeout(600)
 
-            # Try colors if default color shows no price (might be OOS in that color)
-            price = try_find_available_price(page)
+            # Lowest IN-STOCK price across colors + the variant-specific URL it
+            # was found at. None means every color is sold out → skip.
+            price, vurl = try_find_available_price(page)
             if price is None:
                 continue
 
@@ -284,7 +316,7 @@ def scrape_product(page, slug, product_name, img_url, rating, review_count, warr
 
             results.append({
                 "condition": normalize_condition(cond_text), "storage": storage, "ram": ram,
-                "price": price, "url": url,
+                "price": price, "url": vurl,
             })
 
     return url, results

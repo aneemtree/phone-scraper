@@ -16,6 +16,7 @@ import time
 import requests
 from dotenv import load_dotenv
 from supabase import create_client
+from obs import init_sentry, log_error
 
 load_dotenv()
 
@@ -328,4 +329,9 @@ def normalize():
 
 
 if __name__ == "__main__":
-    normalize()
+    init_sentry("normalize_ai")
+    try:
+        normalize()
+    except Exception as e:
+        log_error(e, component="normalize_ai", phase="normalize")
+        raise

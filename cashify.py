@@ -27,6 +27,7 @@ import requests
 from playwright.sync_api import sync_playwright
 from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone
 from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
+from obs import init_sentry, log_error
 
 SITE = "cashify"
 BASE_URL = "https://www.cashify.in"
@@ -274,6 +275,7 @@ def scrape():
             _url, rows = scrape_product(slug, img_url)
         except Exception as e:
             print(f"  [{idx}/{len(products)}] ERROR {slug}: {str(e)[:80]}")
+            log_error(e, site=SITE, slug=slug)
             time.sleep(DELAY)
             continue
 
@@ -323,4 +325,9 @@ def scrape():
 
 
 if __name__ == "__main__":
-    scrape()
+    init_sentry(SITE)
+    try:
+        scrape()
+    except Exception as e:
+        log_error(e, site=SITE, phase="scrape")
+        raise

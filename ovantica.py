@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from playwright.sync_api import sync_playwright
 from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone
 from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
+from obs import init_sentry, log_error
 
 SITE = "ovantica"
 BASE_URL = "https://ovantica.com"
@@ -244,6 +245,7 @@ def scrape():
             return parse_product_page(path)
         except Exception as e:
             print(f"  ERROR {path}: {str(e)[:80]}")
+            log_error(e, site=SITE, path=path)
             return []
 
     done = 0
@@ -293,4 +295,9 @@ def scrape():
 
 
 if __name__ == "__main__":
-    scrape()
+    init_sentry(SITE)
+    try:
+        scrape()
+    except Exception as e:
+        log_error(e, site=SITE, phase="scrape")
+        raise

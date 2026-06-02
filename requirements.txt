@@ -3,3 +3,4 @@ beautifulsoup4
 supabase
 playwright
 python-dotenv
+sentry-sdk

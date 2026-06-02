@@ -87,10 +87,14 @@ If two stores produce different variant_keys for the same physical phone
 (normalization didn't catch it), set canonical_key on both phones rows in
 Supabase to the same value. The offers view uses coalesce(canonical_key, variant_key).
 
-### Image hosting
-Download and host images in Supabase Storage bucket "phone-images" on FIRST
-sighting only. Path format: {site}/{variant_key}.jpg. Skip if already exists.
-Use ensure_image() from db.py.
+### Image hosting (Cloudflare R2)
+Host images on Cloudflare R2 (zero egress — Supabase's cached egress was the quota
+we blew; DB/storage size are tiny). ensure_image() in db.py uploads to R2 on FIRST
+sighting only (path `{site}/{variant_key}.jpg`, head_object skip) and returns the
+R2 public URL. Config via env: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
+R2_BUCKET, R2_PUBLIC_BASE_URL (passed at job level in all workflows). If unset,
+ensure_image falls back to the store's source image URL, so local/unconfigured runs
+still work. The DB stays on Supabase. One-off backfill: migrate_images_to_r2.py.
 
 ### Store metadata
 After adding a new store, add a row to the stores table:

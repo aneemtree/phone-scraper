@@ -37,7 +37,7 @@ DELAY = 0.3
 def get_product_urls():
     """Use Playwright to click Load More and collect all product URLs via _rsc= intercept."""
     print("Loading listing page (clicking Load More)...")
-    product_urls = {}  # id -> full path
+    product_urls = {}  # slug (no variant id) -> full path
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
@@ -46,9 +46,16 @@ def get_product_urls():
         def on_response(resp):
             m = re.search(r"(/buy-refurbished[^?]+/(\d+))\?_rsc=", resp.url)
             if m:
-                path, pid = m.group(1), m.group(2)
-                if pid not in product_urls:
-                    product_urls[pid] = path
+                path = m.group(1)
+                # The trailing number is a per-VARIANT id; the listing (and Next.js
+                # prefetch) emits one URL per color/variant, so the SAME phone shows
+                # up under several ids. Key by the slug WITHOUT the trailing id so we
+                # fetch each phone once — otherwise we scrape it repeatedly and emit
+                # duplicate condition rows. The payload on any one variant URL carries
+                # every variant, so the specific entry id we keep doesn't matter.
+                slug = re.sub(r"/\d+$", "", path)
+                if slug not in product_urls:
+                    product_urls[slug] = path
 
         page.on("response", on_response)
         page.goto(LISTING_URL, wait_until="domcontentloaded", timeout=60000)
@@ -250,7 +257,7 @@ def scrape():
     # Phase 2: visit each product page, parse variants
     best = {}  # (variant_key, condition) -> lowest price offer
 
-    for idx, (pid, path) in enumerate(product_urls.items(), 1):
+    for idx, (slug, path) in enumerate(product_urls.items(), 1):
         try:
             variants = parse_product_page(path)
         except Exception as e:

@@ -259,7 +259,13 @@ def clean_model(title: str) -> str:
     """Strip storage, color, and refurb noise to get a clean model name."""
     t = title
     t = re.sub(r"\(.*?\)", " ", t)                      # remove (...) groups
-    t = re.sub(r"saver series.*$", " ", t, flags=re.I)  # ControlZ saver suffix
+    # ControlZ condition grades ("Premium Renewed", "Saver Series") can lead or
+    # trail the title/slug. Strip the grade words so they never leak into the
+    # model name. The old "saver series.*$" rule deleted everything after it —
+    # including the model itself when the grade came first ("Saver Series iPhone
+    # 12" -> ""). "renewed" is removed by the refurb pass below; we strip the
+    # remaining "premium"/"saver"/"series" grade words here.
+    t = re.sub(r"\b(premium[\s_-]+renewed|saver[\s_-]+series|premium|saver|series)\b", " ", t, flags=re.I)
     t = re.sub(r"\b\d+\s?(GB|TB)\b", " ", t, flags=re.I) # storage
     for c in COLORS:                                     # colors (longest first)
         t = re.sub(rf"\b{re.escape(c)}\b", " ", t, flags=re.I)
@@ -284,6 +290,17 @@ def clean_model(title: str) -> str:
     for _token, _prefix in SUB_BRAND_PREFIX:
         _word = _prefix.split(" ")[-1]  # canonical-cased sub-brand word, e.g. "Galaxy"
         t = re.sub(rf"\b{re.escape(_word)}\b", _word, t, flags=re.I)
+
+    # Collapse whitespace BEFORE the anchored brand pass. Stripping noise words
+    # (refurbished/renewed/grade labels) leaves leading/double spaces, and the
+    # "^token\s" anchor below would otherwise miss (" iPhone 12" never matches
+    # "^iphone\s"), leaving the model un-prefixed and splitting the brand filter.
+    # Also turn slug-style separators between lowercase/digit chars into spaces so
+    # a slug fallback ("premium-renewed-iphone-12") reaches the brand pass too;
+    # the lookarounds skip uppercase model numbers like "SM-G991B".
+    t = re.sub(r"(?<=[a-z0-9])[-_](?=[a-z0-9])", " ", t)
+    t = re.sub(r"^[\s\-_–|]+|[\s\-_–|]+$", "", t)  # trim leading/trailing separators
+    t = re.sub(r"\s+", " ", t).strip()
 
     # Normalize brand names. For each sub-brand/alias, anchor to the START and
     # match case-insensitively so every variant collapses to one canonical brand

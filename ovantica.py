@@ -22,7 +22,7 @@ from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 from playwright.sync_api import sync_playwright
 from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone
-from db import save_phone, save_price, ensure_image, mark_site_oos
+from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
 
 SITE = "ovantica"
 BASE_URL = "https://ovantica.com"
@@ -248,6 +248,8 @@ def parse_product_page(path):
 
 
 def scrape():
+    from datetime import datetime, timezone
+    run_started_at = datetime.now(timezone.utc).isoformat()
     mark_site_oos(SITE)
 
     # Phase 1: get all product URLs
@@ -306,6 +308,9 @@ def scrape():
         )
         saved += 1
         print(f"  saved: {o['name']:40} [{condition:15}] ₹{o['price']:.0f}")
+
+    # Phones not seen in this run -> out of stock (guarded against partial runs).
+    mark_unseen_out_of_stock(SITE, run_started_at)
 
     print(f"\nDone. Saved {saved} offers from {SITE}.")
 

@@ -19,7 +19,7 @@ import time
 import requests
 from playwright.sync_api import sync_playwright
 from normalize import clean_model, normalize_storage, normalize_ram, make_variant_key, parse_size_string, normalize_condition, is_phone
-from db import save_phone, save_price, ensure_image, mark_site_oos
+from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
 
 SITE = "controlz"
 LISTING_URL = "https://www.controlz.world/store"
@@ -203,6 +203,8 @@ def scrape_product(page, slug):
 
 
 def scrape():
+    from datetime import datetime, timezone
+    run_started_at = datetime.now(timezone.utc).isoformat()
     mark_site_oos("controlz")
     products = get_product_slugs()
     print(f"Found {len(products)} products to visit.")
@@ -217,8 +219,17 @@ def scrape():
             except Exception as e:
                 print(f"  [{idx}/{len(products)}] {slug}: ERROR {str(e)[:80]}")
                 time.sleep(DELAY_SECONDS); continue
+
+            # Filter non-phones by the ACTUAL product title, not just the slug.
+            # The slug-level is_phone() check at collection time misses items whose
+            # slug looks phone-ish but whose title is an accessory (e.g. a power
+            # bank tagged productType "phone" in the listing payload).
+            model = clean_model(page_title or parent_title)
+            if not model or not is_phone(model, slug):
+                print(f"  [{idx}/{len(products)}] {slug}: skipped (not a phone: {page_title!r})")
+                time.sleep(DELAY_SECONDS); continue
+
             for cond, st, price in rows:
-                model = clean_model(page_title or parent_title)
                 storage = normalize_storage(st) if st else None
                 ram = normalize_ram(parent_title)
                 vkey = make_variant_key(model, storage, ram)
@@ -252,6 +263,10 @@ def scrape():
                    rating=o.get("rating"), review_count=o.get("review_count"))
         saved += 1
         print(f"  saved: {o['name']:28} [{cond:16}] ₹{o['price']:.0f}")
+
+    # Phones not seen in this run -> out of stock (guarded against partial runs).
+    mark_unseen_out_of_stock(SITE, run_started_at)
+
     print(f"\nDone. Saved {saved} (variant, condition) offers from {SITE}.")
 
 

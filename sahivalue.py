@@ -18,7 +18,7 @@ import time
 import requests
 from bs4 import BeautifulSoup
 from normalize import clean_model, normalize_storage, make_variant_key, parse_size_string, normalize_condition, parse_name_from_listing, is_phone
-from db import save_phone, save_price, ensure_image, mark_site_oos
+from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
 
 SITE = "sahivalue"
 BASE_URL = "https://www.sahivalue.com"
@@ -269,6 +269,8 @@ def _parse_name_storage(raw):
 
 
 def scrape():
+    from datetime import datetime, timezone
+    run_started_at = datetime.now(timezone.utc).isoformat()
     mark_site_oos("sahivalue")
     print("Collecting product URLs from listing...")
     url_map = get_listing_urls()
@@ -324,6 +326,9 @@ def scrape():
         )
         saved += 1
         print(f"  saved: {o['name']:40} [{condition:20}] ₹{o['price']:.0f}")
+
+    # Phones not seen in this run -> out of stock (guarded against partial runs).
+    mark_unseen_out_of_stock(SITE, run_started_at)
 
     print(f"\nDone. Saved {saved} offers from {SITE}.")
 

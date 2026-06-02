@@ -3,10 +3,15 @@ Database helper. Connects to Supabase and saves phones + price snapshots.
 All scrapers import from here.
 """
 import os
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
 load_dotenv()
+
+
+def _utcnow_iso():
+    return datetime.now(timezone.utc).isoformat()
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
@@ -26,17 +31,21 @@ def save_phone(site, name, url, image_url, model, storage, ram, variant_key):
         .eq("name", name)
         .execute()
     )
+    now = _utcnow_iso()
     if existing.data:
         pid = existing.data[0]["id"]
+        # Seeing the phone this run = in stock; stamp last_seen_at for the OOS sweep.
         supabase.table("phones").update({
             "url": url, "image_url": image_url, "model": model,
             "storage": storage, "ram": ram, "variant_key": variant_key,
+            "last_seen_at": now, "in_stock": True,
         }).eq("id", pid).execute()
         return pid
 
     inserted = supabase.table("phones").insert({
         "site": site, "name": name, "url": url, "image_url": image_url,
         "model": model, "storage": storage, "ram": ram, "variant_key": variant_key,
+        "last_seen_at": now, "in_stock": True,
     }).execute()
     return inserted.data[0]["id"]
 
@@ -72,6 +81,36 @@ def mark_site_oos(site):
             supabase.table("prices").delete().eq("phone_id", pid).gte("scraped_at", today).execute()
             deleted += 1
     return deleted
+
+
+def mark_unseen_out_of_stock(site, run_started_at, min_seen_ratio=0.5):
+    """Flag this site's phones that were NOT seen during the run as out of stock.
+
+    Call at the END of a scraper, passing the timestamp captured at the START of
+    the run. save_phone() stamps last_seen_at=now on every phone it sees, so any
+    phone with last_seen_at < run_started_at (or null) wasn't in this run.
+
+    Guard: if fewer than `min_seen_ratio` of the site's phones were seen, the
+    sweep is skipped — so a crashed or partial run can't wipe a whole store to
+    out of stock. Phones found this run are set back in_stock=true by save_phone.
+    """
+    total = (supabase.table("phones").select("id", count="exact")
+             .eq("site", site).execute().count or 0)
+    if total == 0:
+        return 0
+    seen = (supabase.table("phones").select("id", count="exact")
+            .eq("site", site).gte("last_seen_at", run_started_at).execute().count or 0)
+    if seen < max(1, int(total * min_seen_ratio)):
+        print(f"  [oos] {site}: only {seen}/{total} phones seen this run — skipping OOS sweep (guard)")
+        return 0
+    # Not seen this run -> out of stock (older last_seen_at, or never stamped).
+    supabase.table("phones").update({"in_stock": False}).eq("site", site).lt("last_seen_at", run_started_at).execute()
+    supabase.table("phones").update({"in_stock": False}).eq("site", site).is_("last_seen_at", "null").execute()
+    still_in = (supabase.table("phones").select("id", count="exact")
+                .eq("site", site).eq("in_stock", True).execute().count or 0)
+    n = total - still_in
+    print(f"  [oos] {site}: {seen}/{total} seen, {n} marked out of stock")
+    return n
 
 
 # ---------- Image self-hosting (first sighting only) ----------

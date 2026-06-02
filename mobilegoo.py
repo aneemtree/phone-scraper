@@ -20,7 +20,7 @@ import re
 import time
 import requests
 from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone, parse_size_string, shopify_option_index
-from db import save_phone, save_price, ensure_image, mark_site_oos
+from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
 
 SITE = "mobilegoo"
 BASE_URL = "https://mobilegoo.shop"
@@ -67,6 +67,8 @@ def fetch_collection(collection):
 
 
 def scrape():
+    from datetime import datetime, timezone
+    run_started_at = datetime.now(timezone.utc).isoformat()
     mark_site_oos(SITE)
 
     best = {}  # (variant_key, condition) -> lowest price offer
@@ -163,6 +165,9 @@ def scrape():
         )
         saved += 1
         print(f"  saved: {o['name']:40} [{condition:15}] ₹{o['price']:.0f}")
+
+    # Phones not seen in this run -> out of stock (guarded against partial runs).
+    mark_unseen_out_of_stock(SITE, run_started_at)
 
     print(f"\nDone. Saved {saved} offers from {SITE}.")
 

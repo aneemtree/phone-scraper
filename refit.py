@@ -23,7 +23,7 @@ import re
 import time
 import requests
 from normalize import clean_model, normalize_storage, make_variant_key, parse_size_string, normalize_condition, is_phone, shopify_option_index
-from db import save_phone, save_price, ensure_image, mark_site_oos
+from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
 
 SITE = "refit"
 BASE_URL = "https://refitglobal.com"
@@ -89,6 +89,8 @@ def get_image(product):
 
 
 def scrape():
+    from datetime import datetime, timezone
+    run_started_at = datetime.now(timezone.utc).isoformat()
     mark_site_oos("refit")
     print("Fetching all products from Refit API...")
     products = fetch_all_products()
@@ -208,6 +210,9 @@ def scrape():
         )
         saved += 1
         print(f"  saved: {o['name']:35} [{grade:12}] ₹{o['price']:.0f}")
+
+    # Phones not seen in this run -> out of stock (guarded against partial runs).
+    mark_unseen_out_of_stock(SITE, run_started_at)
 
     print(f"\nDone. Saved {saved} (variant, grade) offers from {SITE}.")
 

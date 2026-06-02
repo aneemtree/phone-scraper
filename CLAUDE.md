@@ -1,3 +1,9 @@
+## Merging to main
+NEVER merge to `main` autonomously. Develop, commit, and push freely on the
+feature branch, but only merge to `main` when the user EXPLICITLY asks for it.
+Verifying a change against real data is not permission to merge — wait for the
+user to say so.
+
 ## Keeping this file current
 ALWAYS update this CLAUDE.md whenever you merge a change to `main`. In the same
 work that does the merge, edit the relevant section(s) to reflect what changed

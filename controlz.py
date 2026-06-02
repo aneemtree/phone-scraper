@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from playwright.sync_api import sync_playwright
 from normalize import clean_model, normalize_storage, normalize_ram, make_variant_key, parse_size_string, normalize_condition, is_phone
 from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
+from obs import init_sentry, log_error
 
 SITE = "controlz"
 LISTING_URL = "https://www.controlz.world/store"
@@ -235,6 +236,7 @@ def scrape():
                 url, page_title, image_url, rating, review_count, rows = fut.result()
             except Exception as e:
                 print(f"  {slug}: ERROR {str(e)[:80]}")
+                log_error(e, site=SITE, slug=slug)
                 continue
 
             # Filter non-phones by the ACTUAL product title, not just the slug.
@@ -286,4 +288,9 @@ def scrape():
 
 
 if __name__ == "__main__":
-    scrape()
+    init_sentry(SITE)
+    try:
+        scrape()
+    except Exception as e:
+        log_error(e, site=SITE, phase="scrape")
+        raise

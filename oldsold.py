@@ -22,6 +22,7 @@ import time
 import requests
 from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone, parse_size_string
 from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
+from obs import init_sentry, log_error
 
 SITE = "oldsold"
 BASE_URL = "https://oldsold.in"
@@ -196,4 +197,9 @@ def scrape():
 
 
 if __name__ == "__main__":
-    scrape()
+    init_sentry(SITE)
+    try:
+        scrape()
+    except Exception as e:
+        log_error(e, site=SITE, phase="scrape")
+        raise

@@ -19,6 +19,7 @@ import requests
 from bs4 import BeautifulSoup
 from normalize import clean_model, normalize_storage, make_variant_key, parse_size_string, normalize_condition, parse_name_from_listing, is_phone
 from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
+from obs import init_sentry, log_error
 
 SITE = "sahivalue"
 BASE_URL = "https://www.sahivalue.com"
@@ -284,6 +285,7 @@ def scrape():
             model, variants = fetch_product_variants(prod_url)
         except Exception as e:
             print(f"  [{idx}/{len(url_map)}] ERROR {prod_url}: {e}")
+            log_error(e, site=SITE, url=prod_url)
             time.sleep(DELAY)
             continue
 
@@ -334,4 +336,9 @@ def scrape():
 
 
 if __name__ == "__main__":
-    scrape()
+    init_sentry(SITE)
+    try:
+        scrape()
+    except Exception as e:
+        log_error(e, site=SITE, phase="scrape")
+        raise

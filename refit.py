@@ -24,6 +24,7 @@ import time
 import requests
 from normalize import clean_model, normalize_storage, make_variant_key, parse_size_string, normalize_condition, is_phone, shopify_option_index
 from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
+from obs import init_sentry, log_error
 
 SITE = "refit"
 BASE_URL = "https://refitglobal.com"
@@ -218,4 +219,9 @@ def scrape():
 
 
 if __name__ == "__main__":
-    scrape()
+    init_sentry(SITE)
+    try:
+        scrape()
+    except Exception as e:
+        log_error(e, site=SITE, phase="scrape")
+        raise

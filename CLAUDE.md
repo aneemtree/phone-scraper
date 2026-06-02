@@ -118,6 +118,15 @@ normalize_ai.py (runs AFTER all scrapers, full pipeline only): Pass 0 deletes
 non-phones (AI), Pass 1 cleans model names, Pass 2 sets canonical_key for
 cross-store duplicates (groups by model+storage, RAM-agnostic).
 
+### Error logging (Sentry)
+Optional Sentry error logging lives in obs.py: `init_sentry(SITE)` +
+`log_error(exc, **tags)`. It's a NO-OP unless the `SENTRY_DSN` env var is set, so
+local/sandbox runs are unaffected. Each scraper's `__main__` calls init_sentry
+and reports any crash; the per-item `except` loops (cashify/controlz/ovantica/
+sahivalue) also call log_error so swallowed product errors are still captured.
+The workflows pass `SENTRY_DSN: ${{ secrets.SENTRY_DSN }}` at job level (add the
+secret in repo settings to turn it on). sentry-sdk is in requirements.txt.
+
 ### Testing discipline
 Don't assume site structure — test against real data first. When the sandbox
 can't reach a site, hand the user a self-contained `python3 - <<'EOF'` block to

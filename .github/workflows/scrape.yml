@@ -13,6 +13,10 @@ permissions:
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    # Optional Sentry error logging — inherited by every step. No-op if the
+    # SENTRY_DSN secret isn't set.
+    env:
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
     steps:
       - name: Check out code
         uses: actions/checkout@v4

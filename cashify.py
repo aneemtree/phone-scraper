@@ -26,7 +26,7 @@ import time
 import requests
 from playwright.sync_api import sync_playwright
 from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone
-from db import save_phone, save_price, ensure_image, mark_site_oos
+from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
 
 SITE = "cashify"
 BASE_URL = "https://www.cashify.in"
@@ -247,6 +247,8 @@ def scrape_product(slug, img_url):
 
 
 def scrape():
+    from datetime import datetime, timezone
+    run_started_at = datetime.now(timezone.utc).isoformat()
     mark_site_oos(SITE)
 
     with sync_playwright() as pw:
@@ -313,6 +315,9 @@ def scrape():
         )
         saved += 1
         print(f"  saved: {o['name']:30} [{cond:12}] ₹{o['price']:.0f}")
+
+    # Phones not seen in this run -> out of stock (guarded against partial runs).
+    mark_unseen_out_of_stock(SITE, run_started_at)
 
     print(f"\nDone. Saved {saved} (variant, condition) offers from {SITE}.")
 

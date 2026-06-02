@@ -109,8 +109,51 @@ def mark_unseen_out_of_stock(site, run_started_at, min_seen_ratio=0.5):
     still_in = (supabase.table("phones").select("id", count="exact")
                 .eq("site", site).eq("in_stock", True).execute().count or 0)
     n = total - still_in
-    print(f"  [oos] {site}: {seen}/{total} seen, {n} marked out of stock")
+    # Per-condition availability: a phone can be in stock while one of its grades
+    # is sold out. Mark grades not refreshed this run as out_of_stock too.
+    cond_oos = _mark_disappeared_conditions_oos(site, run_started_at)
+    print(f"  [oos] {site}: {seen}/{total} seen, {n} phones OOS, {cond_oos} conditions OOS")
     return n
+
+
+def _mark_disappeared_conditions_oos(site, run_started_at):
+    """For phones SEEN this run, mark any condition NOT refreshed this run as
+    out of stock by appending an out_of_stock price snapshot (copying the last
+    known price/url). latest_prices then surfaces out_of_stock for that grade,
+    so a sold-out condition stops showing as in stock while its sibling grades
+    stay available. Idempotent: skips conditions whose latest row is already OOS.
+    """
+    seen = (supabase.table("phones").select("id")
+            .eq("site", site).gte("last_seen_at", run_started_at).execute().data or [])
+    seen_ids = [p["id"] for p in seen]
+    inserted = 0
+    for i in range(0, len(seen_ids), 50):
+        batch = seen_ids[i:i + 50]
+        # (phone, condition) combos that got a fresh row this run (server-side
+        # timestamp compare avoids string-format pitfalls).
+        fresh = {(r["phone_id"], r["condition"]) for r in
+                 (supabase.table("prices").select("phone_id, condition")
+                  .in_("phone_id", batch).gte("scraped_at", run_started_at).execute().data or [])}
+        all_rows = (supabase.table("prices")
+                    .select("phone_id, condition, price, availability, scraped_at, url")
+                    .in_("phone_id", batch).execute().data or [])
+        # latest row per (phone, condition) — same-format DB timestamps, string max ok.
+        latest = {}
+        for r in all_rows:
+            k = (r["phone_id"], r["condition"])
+            cur = latest.get(k)
+            if cur is None or r["scraped_at"] > cur["scraped_at"]:
+                latest[k] = r
+        for k, r in latest.items():
+            if k in fresh or r["availability"] == "out_of_stock":
+                continue
+            supabase.table("prices").insert({
+                "phone_id": r["phone_id"], "price": r["price"],
+                "availability": "out_of_stock", "condition": r["condition"],
+                "url": r.get("url"),
+            }).execute()
+            inserted += 1
+    return inserted
 
 
 # ---------- Image self-hosting (first sighting only) ----------

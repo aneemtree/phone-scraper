@@ -17,6 +17,7 @@ import re
 import json
 import time
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from playwright.sync_api import sync_playwright
 from normalize import clean_model, normalize_storage, normalize_ram, make_variant_key, parse_size_string, normalize_condition, is_phone
 from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
@@ -25,6 +26,7 @@ SITE = "controlz"
 LISTING_URL = "https://www.controlz.world/store"
 BASE_URL = "https://www.controlz.world"
 DELAY_SECONDS = 1.5
+WORKERS = 5  # concurrent product browsers
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
@@ -202,23 +204,38 @@ def scrape_product(page, slug):
     return url, page_title, image_url, rating, review_count, out
 
 
+def scrape_one(slug):
+    """Open an isolated headless browser for ONE product and scrape it. Each
+    worker gets its own Playwright instance + browser so products can run
+    concurrently (sync Playwright is not shareable across threads). Returns the
+    scrape_product() tuple (url, title, image, rating, reviews, rows)."""
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page(user_agent=UA, viewport={"width": 1366, "height": 900})
+        try:
+            return scrape_product(page, slug)
+        finally:
+            browser.close()
+
+
 def scrape():
     from datetime import datetime, timezone
     run_started_at = datetime.now(timezone.utc).isoformat()
     mark_site_oos("controlz")
     products = get_product_slugs()
-    print(f"Found {len(products)} products to visit.")
+    print(f"Found {len(products)} products to visit ({WORKERS} workers).")
     best = {}
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
-        page = browser.new_page(user_agent=UA, viewport={"width": 1366, "height": 900})
-        for idx, prod in enumerate(products, 1):
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as ex:
+        futures = {ex.submit(scrape_one, prod["slug"]): prod for prod in products}
+        for fut in as_completed(futures):
+            prod = futures[fut]
             slug, parent_title = prod["slug"], prod["title"]
             try:
-                url, page_title, image_url, rating, review_count, rows = scrape_product(page, slug)
+                url, page_title, image_url, rating, review_count, rows = fut.result()
             except Exception as e:
-                print(f"  [{idx}/{len(products)}] {slug}: ERROR {str(e)[:80]}")
-                time.sleep(DELAY_SECONDS); continue
+                print(f"  {slug}: ERROR {str(e)[:80]}")
+                continue
 
             # Filter non-phones by the ACTUAL product title, not just the slug.
             # The slug-level is_phone() check at collection time misses items whose
@@ -226,8 +243,8 @@ def scrape():
             # bank tagged productType "phone" in the listing payload).
             model = clean_model(page_title or parent_title)
             if not model or not is_phone(model, slug):
-                print(f"  [{idx}/{len(products)}] {slug}: skipped (not a phone: {page_title!r})")
-                time.sleep(DELAY_SECONDS); continue
+                print(f"  {slug}: skipped (not a phone: {page_title!r})")
+                continue
 
             for cond, st, price in rows:
                 storage = normalize_storage(st) if st else None
@@ -241,9 +258,7 @@ def scrape():
                         "name": f"{model} {storage or ''}".strip()}
                 if key not in best or price < best[key]["price"]:
                     best[key] = cand
-            print(f"  [{idx}/{len(products)}] {slug}: {len(rows)} price points")
-            time.sleep(DELAY_SECONDS)
-        browser.close()
+            print(f"  {slug}: {len(rows)} price points")
 
     saved = 0
     for (vkey, cond), o in best.items():

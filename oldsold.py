@@ -150,20 +150,28 @@ def scrape():
                 img_url = src
 
             vkey = make_variant_key(model, storage, ram)
-            bkey = (vkey, condition)
+            # Key by RAM as well: oldsold sells distinct RAM variants at the same
+            # storage (e.g. 8GB/256GB vs 12GB/256GB at different prices).
+            # make_variant_key excludes RAM (kept storage-only for cross-store
+            # grouping), so without RAM in the key the two variants would collapse
+            # into one offer. RAM is also folded into the name so save_phone (keyed
+            # on site+name) stores them as separate rows.
+            bkey = (vkey, ram, condition)
 
             if bkey not in best or price < best[bkey]["price"]:
                 best[bkey] = {
                     "model": model, "storage": storage, "ram": ram,
                     "variant_key": vkey, "condition": condition,
                     "price": price, "url": variant_url, "image_url": img_url,
-                    "name": f"{model} {storage or ''}".strip(),
+                    "name": (f"{model} {ram}/{storage}" if ram and storage
+                             else f"{model} {storage or ''}").strip(),
                 }
 
     print(f"\nUnique (variant, condition) offers: {len(best)}")
 
     saved = 0
-    for (vkey, condition), o in best.items():
+    for o in best.values():
+        condition = o["condition"]
         hosted = None
         if o["image_url"]:
             dest = f"{SITE}/{o['variant_key']}.jpg".replace("|", "_")

@@ -24,7 +24,7 @@ import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from playwright.sync_api import sync_playwright
 from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone
-from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
+from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer
 from obs import init_sentry, log_error
 
 SITE = "ovantica"
@@ -190,10 +190,12 @@ def parse_product_page(path):
 
     # Lowest IN-STOCK price per (condition, storage) across colors; keep that
     # variant's id for the deep link. stock_update is the availability source of
-    # truth (qty is unreliable — stays >0 on sold-out variants).
-    best = {}  # (cond_lower, storage) -> {price, storage, condition, vid, image}
+    # truth (qty is unreliable — stays >0 on sold-out variants). In the monthly
+    # OOS catalog pass (INCLUDE_OOS) we also keep out_of_stock variants.
+    best = {}  # (cond_lower, storage) -> {price, storage, condition, vid, image, availability}
     for v in variants:
-        if (v.get("stock_update") or "").lower() != "in_stock":
+        avail = (v.get("stock_update") or "").lower() == "in_stock"
+        if not avail and not INCLUDE_OOS:
             continue
         condition = v.get("condition") or ""
         if re.sub(r"[^a-z]", "", condition.lower()) == "asis":
@@ -203,11 +205,12 @@ def parse_product_page(path):
         if not storage or not price:
             continue
         key = (condition.lower(), storage)
-        cur = best.get(key)
-        if cur is None or price < cur["price"]:
+        availability = "in_stock" if avail else "out_of_stock"
+        if better_offer(availability, price, best.get(key)):
             best[key] = {
                 "price": price, "storage": storage, "condition": condition,
                 "vid": v.get("id"), "image": _variant_image(v),
+                "availability": availability,
             }
 
     results = []
@@ -219,6 +222,7 @@ def parse_product_page(path):
             "storage": normalize_storage(storage),
             "condition": normalize_condition(d["condition"]),
             "price": d["price"],
+            "availability": d["availability"],
             "url": variant_url,
             "img_url": d["image"],
             "rating": rating,
@@ -256,11 +260,12 @@ def scrape():
             for v in (fut.result() or []):
                 vkey = make_variant_key(v["model"], v["storage"])
                 bkey = (vkey, v["condition"])
-                if bkey not in best or v["price"] < best[bkey]["price"]:
+                if better_offer(v["availability"], v["price"], best.get(bkey)):
                     best[bkey] = {
                         "model": v["model"], "storage": v["storage"], "ram": None,
                         "variant_key": vkey, "condition": v["condition"],
-                        "price": v["price"], "url": v["url"], "image_url": v["img_url"],
+                        "price": v["price"], "availability": v["availability"],
+                        "url": v["url"], "image_url": v["img_url"],
                         "name": f"{v['model']} {v['storage'] or ''}".strip(),
                         "rating": v.get("rating"), "review_count": v.get("review_count"),
                     }
@@ -269,6 +274,7 @@ def scrape():
 
     print(f"\nUnique (variant, condition) offers: {len(best)}")
 
+    in_stock_names = {o["name"] for o in best.values() if o["availability"] == "in_stock"}
     saved = 0
     for (vkey, condition), o in best.items():
         hosted = None
@@ -279,14 +285,15 @@ def scrape():
 
         pid = save_phone(
             SITE, o["name"], o["url"], final_image,
-            o["model"], o["storage"], o["ram"], o["variant_key"]
+            o["model"], o["storage"], o["ram"], o["variant_key"],
+            in_stock=(o["name"] in in_stock_names),
         )
         save_price(
-            pid, o["price"], availability="in_stock",
+            pid, o["price"], availability=o["availability"],
             condition=condition, rating=o.get("rating"), review_count=o.get("review_count"), url=o["url"],
         )
         saved += 1
-        print(f"  saved: {o['name']:40} [{condition:15}] ₹{o['price']:.0f}")
+        print(f"  saved: {o['name']:40} [{condition:15}] {o['availability']:12} ₹{o['price']:.0f}")
 
     # Phones not seen in this run -> out of stock (guarded against partial runs).
     mark_unseen_out_of_stock(SITE, run_started_at)

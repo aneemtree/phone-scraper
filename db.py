@@ -18,11 +18,30 @@ SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# Monthly SEO catalog pass: when INCLUDE_OOS=1, scrapers also save out-of-stock
+# variants (in_stock=false, availability=out_of_stock) so model pages exist even
+# when nothing is buyable. Off by default — the regular crawler is available-only.
+INCLUDE_OOS = os.environ.get("INCLUDE_OOS") == "1"
 
-def save_phone(site, name, url, image_url, model, storage, ram, variant_key):
+
+def better_offer(new_availability, new_price, cur):
+    """Pick the offer to keep for a (variant_key, condition). in_stock beats
+    out_of_stock; within the same availability the lower price wins. `cur` is the
+    current offer dict ({availability, price}) or None."""
+    if cur is None:
+        return True
+    new_in = new_availability == "in_stock"
+    cur_in = cur.get("availability") == "in_stock"
+    if new_in != cur_in:
+        return new_in
+    return new_price < cur["price"]
+
+
+def save_phone(site, name, url, image_url, model, storage, ram, variant_key, in_stock=True):
     """
     Insert a phone offer if new for this (site, name), else return existing id.
     'name' stays the raw site title; model/storage/ram/variant_key are normalized.
+    in_stock=False is used by the monthly OOS catalog pass.
     """
     existing = (
         supabase.table("phones")
@@ -34,18 +53,18 @@ def save_phone(site, name, url, image_url, model, storage, ram, variant_key):
     now = _utcnow_iso()
     if existing.data:
         pid = existing.data[0]["id"]
-        # Seeing the phone this run = in stock; stamp last_seen_at for the OOS sweep.
+        # Stamp last_seen_at for the OOS sweep; in_stock reflects this sighting.
         supabase.table("phones").update({
             "url": url, "image_url": image_url, "model": model,
             "storage": storage, "ram": ram, "variant_key": variant_key,
-            "last_seen_at": now, "in_stock": True,
+            "last_seen_at": now, "in_stock": in_stock,
         }).eq("id", pid).execute()
         return pid
 
     inserted = supabase.table("phones").insert({
         "site": site, "name": name, "url": url, "image_url": image_url,
         "model": model, "storage": storage, "ram": ram, "variant_key": variant_key,
-        "last_seen_at": now, "in_stock": True,
+        "last_seen_at": now, "in_stock": in_stock,
     }).execute()
     return inserted.data[0]["id"]
 

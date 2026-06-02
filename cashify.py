@@ -26,7 +26,7 @@ import time
 import requests
 from playwright.sync_api import sync_playwright
 from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone, parse_size_string
-from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
+from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer
 from obs import init_sentry, log_error
 
 SITE = "cashify"
@@ -211,10 +211,11 @@ def scrape_product(slug, img_url):
     if not model or not is_phone(model):
         return url, []
 
-    best = {}  # (condition, storage, ram) -> {price, vid, image}
+    best = {}  # (condition, storage, ram) -> {price, vid, image, availability}
     for v in variants:
-        if (v.get("availableInventory") or 0) <= 0:
-            continue  # sold out — authoritative availability signal
+        avail = (v.get("availableInventory") or 0) > 0  # authoritative signal
+        if not avail and not INCLUDE_OOS:
+            continue
         grade = v.get("grade")
         if not grade:
             continue
@@ -225,19 +226,20 @@ def scrape_product(slug, img_url):
         if not price:
             continue
         key = (normalize_condition(grade), storage, ram)
-        cur = best.get(key)
-        if cur is None or price < cur["price"]:
+        availability = "in_stock" if avail else "out_of_stock"
+        if better_offer(availability, price, best.get(key)):
             best[key] = {
                 "price": price,
                 "vid": v.get("variantId"),
                 "image": v.get("defaultProductImg") or None,
+                "availability": availability,
             }
 
     rows = []
     for (condition, storage, ram), b in best.items():
         rows.append({
             "model": model, "condition": condition, "storage": storage, "ram": ram,
-            "price": b["price"],
+            "price": b["price"], "availability": b["availability"],
             "url": f"{url}/{b['vid']}" if b.get("vid") else url,
             "image_url": img_url or b.get("image"),
         })
@@ -282,18 +284,20 @@ def scrape():
             cand = {
                 "model": r["model"], "storage": r["storage"], "ram": r["ram"],
                 "variant_key": vkey, "condition": r["condition"],
-                "price": r["price"], "url": r["url"], "image_url": r["image_url"],
+                "price": r["price"], "availability": r["availability"],
+                "url": r["url"], "image_url": r["image_url"],
                 "rating": rating, "review_count": review_count,
                 "warranty_months": warranty_months,
                 "name": f"{r['model']} {r['storage'] or ''}".strip(),
             }
-            if key not in best or r["price"] < best[key]["price"]:
+            if better_offer(r["availability"], r["price"], best.get(key)):
                 best[key] = cand
 
         print(f"  [{idx}/{len(products)}] {slug}: {len(rows)} offers")
         time.sleep(DELAY)
 
-    # Save to Supabase
+    # Save to Supabase. Phone (site+name) is in stock if any offer is.
+    in_stock_names = {o["name"] for o in best.values() if o["availability"] == "in_stock"}
     saved = 0
     for (vkey, cond), o in best.items():
         hosted = None
@@ -304,16 +308,17 @@ def scrape():
 
         pid = save_phone(
             SITE, o["name"], o["url"], final_image,
-            o["model"], o["storage"], o["ram"], o["variant_key"]
+            o["model"], o["storage"], o["ram"], o["variant_key"],
+            in_stock=(o["name"] in in_stock_names),
         )
         save_price(
-            pid, o["price"], availability="in_stock",
+            pid, o["price"], availability=o["availability"],
             condition=o["condition"], rating=o.get("rating"),
             review_count=o.get("review_count"),
             warranty_months=o.get("warranty_months"), url=o["url"],
         )
         saved += 1
-        print(f"  saved: {o['name']:30} [{cond:12}] ₹{o['price']:.0f}")
+        print(f"  saved: {o['name']:30} [{cond:12}] {o['availability']:12} ₹{o['price']:.0f}")
 
     # Phones not seen in this run -> out of stock (guarded against partial runs).
     mark_unseen_out_of_stock(SITE, run_started_at)

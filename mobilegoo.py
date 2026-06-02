@@ -20,7 +20,7 @@ import re
 import time
 import requests
 from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone, parse_size_string, shopify_option_index
-from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
+from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer
 from obs import init_sentry, log_error
 
 SITE = "mobilegoo"
@@ -105,7 +105,8 @@ def scrape():
             cond_pos = opt_idx.get("grade", 3)
 
             for v in prod.get("variants", []):
-                if not v.get("available", False):
+                avail = bool(v.get("available", False))
+                if not avail and not INCLUDE_OOS:
                     continue
 
                 price = float(v.get("price", 0) or 0)
@@ -135,12 +136,14 @@ def scrape():
 
                 vkey = make_variant_key(model, storage, ram)
                 bkey = (vkey, condition)
+                availability = "in_stock" if avail else "out_of_stock"
 
-                if bkey not in best or price < best[bkey]["price"]:
+                if better_offer(availability, price, best.get(bkey)):
                     best[bkey] = {
                         "model": model, "storage": storage, "ram": ram,
                         "variant_key": vkey, "condition": condition,
-                        "price": price, "url": variant_url, "image_url": img_url,
+                        "price": price, "availability": availability,
+                        "url": variant_url, "image_url": img_url,
                         "name": f"{model} {storage or ''}".strip(),
                     }
 
@@ -148,6 +151,7 @@ def scrape():
 
     print(f"\nUnique (variant, condition) offers: {len(best)}")
 
+    in_stock_names = {o["name"] for o in best.values() if o["availability"] == "in_stock"}
     saved = 0
     for (vkey, condition), o in best.items():
         hosted = None
@@ -158,14 +162,15 @@ def scrape():
 
         pid = save_phone(
             SITE, o["name"], o["url"], final_image,
-            o["model"], o["storage"], o["ram"], o["variant_key"]
+            o["model"], o["storage"], o["ram"], o["variant_key"],
+            in_stock=(o["name"] in in_stock_names),
         )
         save_price(
-            pid, o["price"], availability="in_stock",
+            pid, o["price"], availability=o["availability"],
             condition=condition, rating=None, review_count=None, url=o["url"],
         )
         saved += 1
-        print(f"  saved: {o['name']:40} [{condition:15}] ₹{o['price']:.0f}")
+        print(f"  saved: {o['name']:40} [{condition:15}] {o['availability']:12} ₹{o['price']:.0f}")
 
     # Phones not seen in this run -> out of stock (guarded against partial runs).
     mark_unseen_out_of_stock(SITE, run_started_at)

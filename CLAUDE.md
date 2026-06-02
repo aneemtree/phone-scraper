@@ -118,7 +118,21 @@ Workflows (GitHub Actions):
     It does NOT run on push/merge. Runs all scrapers, then normalize_ai.py.
   - scrape-one.yml — manual single-site chooser (workflow_dispatch) for testing
     one scraper. Does NOT run normalize_ai.
+  - scrape-catalog.yml — MONTHLY (1st, 01:00 UTC) + dispatch. Runs the 6 JSON/RSC
+    scrapers with INCLUDE_OOS=1 then normalize_ai, purely for SEO.
 GitHub Actions cron is best-effort and often delayed (can be 1–3h late).
+
+### Out-of-stock catalog (SEO, monthly)
+When the `INCLUDE_OOS=1` env var is set (only scrape-catalog.yml sets it), the 6
+JSON/RSC scrapers (cashify, ovantica, refit, oldsold, mobilegoo, sahivalue) ALSO
+save out-of-stock variants: `phones.in_stock=false` + an `out_of_stock` price
+snapshot at the LOWEST selling price (not the strike price), so model pages exist
+for SEO even when nothing is buyable. Default runs are available-only (flag off).
+Shared helpers in db.py: `INCLUDE_OOS` and `better_offer(availability, price, cur)`
+(in_stock beats out_of_stock; else lower price). Per scraper, phone-level in_stock
+is set true iff any of that phone's (site+name) offers is in stock; it self-heals
+when a regular run later finds it available. ControlZ (DOM) and Xtracover are NOT
+wired for OOS yet — no cheap sold-out source.
 
 normalize_ai.py (runs AFTER all scrapers, full pipeline only): Pass 0 deletes
 non-phones (AI), Pass 1 cleans model names, Pass 2 sets canonical_key for

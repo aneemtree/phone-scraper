@@ -18,7 +18,7 @@ import time
 import requests
 from bs4 import BeautifulSoup
 from normalize import clean_model, normalize_storage, make_variant_key, parse_size_string, normalize_condition, parse_name_from_listing, is_phone
-from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
+from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer
 from obs import init_sentry, log_error
 
 SITE = "sahivalue"
@@ -192,7 +192,8 @@ def fetch_product_variants(prod_url):
     results = []
 
     for v in variants:
-        if v.get("is_out_of_stock", True):
+        avail = not v.get("is_out_of_stock", True)
+        if not avail and not INCLUDE_OOS:
             continue
 
         price = v.get("selling_price")
@@ -240,6 +241,7 @@ def fetch_product_variants(prod_url):
         results.append({
             "model": model, "ram": ram, "storage": storage,
             "condition": condition, "price": price,
+            "availability": "in_stock" if avail else "out_of_stock",
             "img_url": img_url, "url": variant_url,
             "name": f"{model} {storage or ''}".strip(),
         })
@@ -297,19 +299,21 @@ def scrape():
         for v in variants:
             vkey = make_variant_key(v["model"], v["storage"], v["ram"])
             bkey = (vkey, v["condition"])
-            if bkey not in best or v["price"] < best[bkey]["price"]:
+            if better_offer(v["availability"], v["price"], best.get(bkey)):
                 best[bkey] = {
                     "model": v["model"], "storage": v["storage"], "ram": v["ram"],
                     "variant_key": vkey, "condition": v["condition"],
-                    "price": v["price"], "url": v["url"], "image_url": v["img_url"],
+                    "price": v["price"], "availability": v["availability"],
+                    "url": v["url"], "image_url": v["img_url"],
                     "name": f"{v['model']} {v['storage'] or ''}".strip(),
                 }
 
-        print(f"  [{idx}/{len(url_map)}] {model}: {len(variants)} available variants")
+        print(f"  [{idx}/{len(url_map)}] {model}: {len(variants)} variants")
         time.sleep(DELAY)
 
     print(f"\nUnique (variant, condition) offers: {len(best)}")
 
+    in_stock_names = {o["name"] for o in best.values() if o["availability"] == "in_stock"}
     saved = 0
     for (vkey, condition), o in best.items():
         hosted = None
@@ -320,14 +324,15 @@ def scrape():
 
         pid = save_phone(
             SITE, o["name"], o["url"], final_image,
-            o["model"], o["storage"], o["ram"], o["variant_key"]
+            o["model"], o["storage"], o["ram"], o["variant_key"],
+            in_stock=(o["name"] in in_stock_names),
         )
         save_price(
-            pid, o["price"], availability="in_stock",
+            pid, o["price"], availability=o["availability"],
             condition=condition, rating=None, review_count=None, url=o["url"],
         )
         saved += 1
-        print(f"  saved: {o['name']:40} [{condition:20}] ₹{o['price']:.0f}")
+        print(f"  saved: {o['name']:40} [{condition:20}] {o['availability']:12} ₹{o['price']:.0f}")
 
     # Phones not seen in this run -> out of stock (guarded against partial runs).
     mark_unseen_out_of_stock(SITE, run_started_at)

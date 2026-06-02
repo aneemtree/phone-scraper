@@ -1,3 +1,11 @@
+## Keeping this file current
+ALWAYS update this CLAUDE.md whenever you merge a change to `main`. In the same
+work that does the merge, edit the relevant section(s) to reflect what changed
+(new/removed scraper, schema change, availability/normalization rule, workflow,
+data source, etc.) and commit the doc update alongside (or immediately after)
+the merge. This file is the source of truth for how the system works — a merge
+that changes behaviour without updating it is incomplete.
+
 ## Standard scraping approach (apply to ALL scrapers)
 
 ### Price capture rule
@@ -87,6 +95,17 @@ Upload the store logo to Supabase Storage "logos" bucket and update logo_url.
 Active scrapers: cashify, controlz, refit, xtracover, ovantica, mobilegoo,
 sahivalue, oldsold. ControlZ filters non-phones by the actual product TITLE via
 is_phone() (a slug-only check missed accessories like power banks).
+
+Per-site data source / speed:
+  - cashify, ovantica: requests-only — parse the product RSC payload; Playwright
+    used ONLY for the listing/token (ovantica thread-pools the product fetches).
+  - refit, oldsold: Shopify products.json (requests-only).
+  - xtracover: one Playwright session to scroll the listing; no product pages.
+  - controlz: NO usable product API (client calls are analytics; the RSC
+    variant data is server-rendered with incomplete `$`-references — storage is
+    missing, units only partially inlined). So it stays DOM-based (the rendered
+    opacity/line-through/price is the source of truth) but runs each product in
+    its own isolated browser via a ThreadPoolExecutor (WORKERS) for speed.
 
 Workflows (GitHub Actions):
   - scrape.yml — full run, `schedule` only (6 AM & 3 PM IST) + workflow_dispatch.

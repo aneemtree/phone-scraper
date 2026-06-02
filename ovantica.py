@@ -2,15 +2,18 @@
 Ovantica scraper (ovantica.com) — refurbished smartphones.
 
 Two-phase approach:
-  Phase 1: Playwright listing page — click Load More, intercept _rsc= URLs to get all product URLs
-  Phase 2: Plain requests per product page — parse RSC payload for full variant data
-           (storage, condition, color, price, qty)
+  Phase 1: Playwright listing page (one session) — click Load More, intercept
+           _rsc= URLs to collect every product URL.
+  Phase 2: Plain requests per product page (thread-pooled) — parse the RSC
+           payload for full variant data.
 
-Variant structure in RSC payload:
-  storage -> colors[] -> conditions[] -> {condition, price, qty, storage, color, name, image}
+Availability: each variant in the RSC carries a "stock_update" field
+("in_stock"/"out_of_stock") that matches the rendered Add-to-Cart button.
+We filter on that (NOT on "qty", which stays >0 even for sold-out variants —
+phantom inventory). This lets us avoid opening a browser per product.
 
-Only saves variants with qty > 0 (in stock).
-Groups by (model, storage, condition), keeps lowest price across colors.
+Groups by (model, storage, condition), keeps the lowest price across colors,
+and deep-links to the chosen variant via its id (the slug's trailing number).
 
 Run with: python3 ovantica.py
 """
@@ -18,8 +21,7 @@ import re
 import json
 import time
 import requests
-from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from playwright.sync_api import sync_playwright
 from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone
 from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
@@ -31,7 +33,7 @@ CDN = "https://cdn.ovantica.com/cdn-cgi/image/width=400,quality=80,format=auto/i
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 HEADERS = {"User-Agent": UA}
-DELAY = 0.3
+WORKERS = 10  # parallel product fetches
 
 
 def get_product_urls():
@@ -79,54 +81,67 @@ def get_product_urls():
     return product_urls
 
 
-def check_conditions_playwright(url):
-    """Use Playwright to click each condition button and check availability.
-    Returns a list of {"condition": <text>} dicts for conditions that are in
-    stock (Add to Cart present). Price/storage come from the RSC payload.
-    """
-    results = []
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
-        page = browser.new_page(user_agent=UA, viewport={"width": 1366, "height": 900})
-        try:
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(1500)
+def extract_variant_objects(payload, key='"condition"'):
+    """Return the raw JSON text of each variant object in the RSC payload.
+    Anchored on the condition key, brace-matched with string-awareness (so braces
+    inside string values don't throw off the matching)."""
+    out, i, n = [], 0, len(payload)
+    while True:
+        p = payload.find(key, i)
+        if p == -1:
+            break
+        st = payload.rfind('{', 0, p)
+        depth = 0
+        instr = False
+        esc = False
+        end = None
+        for k in range(st, n):
+            c = payload[k]
+            if instr:
+                if esc:
+                    esc = False
+                elif c == '\\':
+                    esc = True
+                elif c == '"':
+                    instr = False
+            else:
+                if c == '"':
+                    instr = True
+                elif c == '{':
+                    depth += 1
+                elif c == '}':
+                    depth -= 1
+                    if depth == 0:
+                        end = k + 1
+                        break
+        if end:
+            out.append(payload[st:end])
+            i = end
+        else:
+            i = p + 1
+    return out
 
-            # Get all condition buttons
-            cond_buttons = page.locator("[data-testid^='condition-']").all()
 
-            for btn in cond_buttons:
-                try:
-                    condition_text = btn.inner_text().strip()
-                    # Skip the lowest "As-Is" grade — we don't list these.
-                    if re.sub(r"[^a-z]", "", condition_text.lower()) == "asis":
-                        continue
-                    btn.click()
-                    page.wait_for_timeout(800)
-
-                    # In stock if the Add to Cart button is present for this
-                    # condition. Price is NOT read here — it comes from the RSC
-                    # payload, which is authoritative; the rendered price element
-                    # was unreliable (EMI/strike values).
-                    has_cart = page.locator("[data-testid='button-add-to-cart']").count() > 0
-                    if not has_cart:
-                        continue
-
-                    results.append({"condition": condition_text})
-                except Exception:
-                    continue
-        except Exception as e:
-            pass
-        finally:
-            browser.close()
-    return results
+def _variant_image(v):
+    """Resolve a variant's image (the RSC stores it as a JSON array string)."""
+    raw = v.get("image")
+    try:
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+        if isinstance(raw, list) and raw:
+            return CDN + raw[0]
+    except Exception:
+        pass
+    return None
 
 
 def parse_product_page(path):
-    """Fetch product page. Use plain requests for fast OOS check.
-    If product has any in-stock variant, use Playwright to check per-condition availability.
-    """
+    """Fetch the product page over plain HTTP (no browser) and parse its RSC
+    payload. Availability = each variant's stock_update == "in_stock" (validated
+    to match the rendered Add-to-Cart). Keeps the lowest in-stock price per
+    (condition, storage) across colors and deep-links to that variant's id."""
     url = BASE_URL + path
+    r = None
     for attempt in range(3):
         try:
             r = requests.get(url, headers=HEADERS, timeout=(10, 20))
@@ -137,47 +152,30 @@ def parse_product_page(path):
             time.sleep(2)
         except Exception:
             return []
-    if r.status_code != 200:
+    if not r or r.status_code != 200:
         return []
 
-    # If no Add to Cart at all — entire product OOS, skip
-    if "Out of Stock" in r.text and "button-add-to-cart" not in r.text:
-        return []
-
-    # Parse base product data from RSC payload
     chunks = re.findall(r'self\.__next_f\.push\(\[\d+,(".*?")\]\)', r.text, re.S)
     payload = "".join(json.loads(c) for c in chunks if c.startswith('"'))
 
-    variant_pattern = (
-        r'\{"condition":"([^"]+)","id":(\d+),"sku":"[^"]*","name":"([^"]+)",'
-        r'"color":"([^"]+)","rom":"[^"]*","price":(\d+),"strikeAmt":"[^"]*",'
-        r'"qty":(\d+),[^}]*"storage":"([^"]+)",[^}]*"image":"((?:[^"\\]|\\.)*)"'
-    )
-    matches = re.findall(variant_pattern, payload)
-    if not matches:
+    variants = []
+    for o in extract_variant_objects(payload):
+        if '"stock_update"' not in o or '"sku"' not in o or '"storage"' not in o:
+            continue
+        try:
+            v = json.loads(o)
+        except Exception:
+            continue
+        if "condition" in v and "price" in v:
+            variants.append(v)
+    if not variants:
         return []
 
-    model = clean_model(matches[0][2])
+    model = clean_model(variants[0].get("name", "") or "")
     if not model or not is_phone(model):
         return []
 
-    # The trailing number in an Ovantica URL is a per-VARIANT id (it changes as
-    # you pick storage/condition/color), not a separate product page. Each variant
-    # object carries its own "id", so we deep-link to that exact variant by
-    # swapping the slug's trailing id for the chosen variant's id.
-    base_slug = re.sub(r"/\d+/?$", "", path)
-
-    # Get product image (group 8 = image of the first variant)
-    prod_img = None
-    try:
-        clean = matches[0][7].replace('\\"', '"').replace("\\'", "'")
-        imgs = json.loads(clean)
-        if imgs:
-            prod_img = CDN + imgs[0]
-    except Exception:
-        pass
-
-    # Extract rating
+    # Rating/reviews from the payload's schema aggregateRating.
     rating, review_count = None, None
     rm = re.search(r'"ratingValue":"([^"]+)".*?"reviewCount":"([^"]+)"', payload)
     if rm:
@@ -187,63 +185,44 @@ def parse_product_page(path):
         except (ValueError, TypeError):
             pass
 
-    # Build per-(condition, storage) variants straight from the payload, which
-    # carries the AUTHORITATIVE price. (The rendered price element is unreliable
-    # — it was picking up EMI/strike values, making every price wrong.) For each
-    # (condition, storage) keep the LOWEST price across colors, per the price rule,
-    # and only consider variants the payload marks in stock (qty > 0).
-    variants_by_key = {}  # (cond_key, storage) -> {price, storage, condition, image_raw, vid}
-    for condition, vid, name, color, price, qty, storage, image_raw in matches:
-        if int(qty) <= 0:
+    base_slug = re.sub(r"/\d+/?$", "", path)
+
+    # Lowest IN-STOCK price per (condition, storage) across colors; keep that
+    # variant's id for the deep link. stock_update is the availability source of
+    # truth (qty is unreliable — stays >0 on sold-out variants).
+    best = {}  # (cond_lower, storage) -> {price, storage, condition, vid, image}
+    for v in variants:
+        if (v.get("stock_update") or "").lower() != "in_stock":
             continue
-        # Skip the lowest "As-Is" grade — we don't list these.
+        condition = v.get("condition") or ""
         if re.sub(r"[^a-z]", "", condition.lower()) == "asis":
+            continue  # skip the lowest "As-Is" grade — we don't list these
+        storage = v.get("storage")
+        price = float(v.get("price") or 0)
+        if not storage or not price:
             continue
-        price = float(price)
         key = (condition.lower(), storage)
-        cur = variants_by_key.get(key)
+        cur = best.get(key)
         if cur is None or price < cur["price"]:
-            variants_by_key[key] = {
-                "price": price, "storage": storage,
-                "condition": condition, "image_raw": image_raw, "vid": vid,
+            best[key] = {
+                "price": price, "storage": storage, "condition": condition,
+                "vid": v.get("id"), "image": _variant_image(v),
             }
 
-    # Use Playwright to confirm which CONDITIONS are actually purchasable on the
-    # rendered page (availability source of truth). If it returns nothing (page
-    # structure changed), fall back to the payload's qty>0 signal alone.
-    in_stock_conditions = check_conditions_playwright(url)
-    available_conds = {c["condition"].lower() for c in in_stock_conditions}
-
     results = []
-    for (cond_key, storage), data in variants_by_key.items():
-        if available_conds and cond_key not in available_conds:
-            continue
-
-        img_url = prod_img
-        try:
-            clean = data["image_raw"].replace('\\"', '"').replace("\\'", "'")
-            imgs = json.loads(clean)
-            if imgs:
-                img_url = CDN + imgs[0]
-        except Exception:
-            pass
-
-        norm_storage = normalize_storage(storage)
+    for (cond_key, storage), d in best.items():
         # Deep-link to this exact variant via its id in the slug's trailing slot.
-        variant_url = f"{BASE_URL}{base_slug}/{data['vid']}" if data.get("vid") else url
-
+        variant_url = f"{BASE_URL}{base_slug}/{d['vid']}" if d.get("vid") else url
         results.append({
             "model": model,
-            "storage": norm_storage,
-            "condition": normalize_condition(data["condition"]),
-            "color": "",
-            "price": data["price"],
+            "storage": normalize_storage(storage),
+            "condition": normalize_condition(d["condition"]),
+            "price": d["price"],
             "url": variant_url,
-            "img_url": img_url,
+            "img_url": d["image"],
             "rating": rating,
             "review_count": review_count,
         })
-
     return results
 
 
@@ -252,41 +231,39 @@ def scrape():
     run_started_at = datetime.now(timezone.utc).isoformat()
     mark_site_oos(SITE)
 
-    # Phase 1: get all product URLs
+    # Phase 1: get all product URLs (one browser session)
     product_urls = get_product_urls()
-    print(f"Total products to visit: {len(product_urls)}\n")
+    paths = list(product_urls.values())
+    print(f"Total products to visit: {len(paths)}\n")
 
-    # Phase 2: visit each product page, parse variants
+    # Phase 2: fetch + parse each product over plain HTTP, in parallel.
     best = {}  # (variant_key, condition) -> lowest price offer
 
-    for idx, (slug, path) in enumerate(product_urls.items(), 1):
+    def work(path):
         try:
-            variants = parse_product_page(path)
+            return parse_product_page(path)
         except Exception as e:
-            print(f"  [{idx}/{len(product_urls)}] ERROR {path}: {e}")
-            time.sleep(DELAY)
-            continue
+            print(f"  ERROR {path}: {str(e)[:80]}")
+            return []
 
-        in_stock = [v for v in variants]
-        if not in_stock:
-            time.sleep(DELAY)
-            continue
-
-        for v in in_stock:
-            vkey = make_variant_key(v["model"], v["storage"])
-            bkey = (vkey, v["condition"])
-            if bkey not in best or v["price"] < best[bkey]["price"]:
-                best[bkey] = {
-                    "model": v["model"], "storage": v["storage"], "ram": None,
-                    "variant_key": vkey, "condition": v["condition"],
-                    "price": v["price"], "url": v["url"], "image_url": v["img_url"],
-                    "name": f"{v['model']} {v['storage'] or ''}".strip(),
-                    "rating": v.get("rating"), "review_count": v.get("review_count"),
-                }
-
-        model_name = in_stock[0]["model"] if in_stock else path
-        print(f"  [{idx}/{len(product_urls)}] {model_name}: {len(in_stock)} in-stock variants")
-        time.sleep(DELAY)
+    done = 0
+    with ThreadPoolExecutor(max_workers=WORKERS) as ex:
+        futures = {ex.submit(work, p): p for p in paths}
+        for fut in as_completed(futures):
+            done += 1
+            for v in (fut.result() or []):
+                vkey = make_variant_key(v["model"], v["storage"])
+                bkey = (vkey, v["condition"])
+                if bkey not in best or v["price"] < best[bkey]["price"]:
+                    best[bkey] = {
+                        "model": v["model"], "storage": v["storage"], "ram": None,
+                        "variant_key": vkey, "condition": v["condition"],
+                        "price": v["price"], "url": v["url"], "image_url": v["img_url"],
+                        "name": f"{v['model']} {v['storage'] or ''}".strip(),
+                        "rating": v.get("rating"), "review_count": v.get("review_count"),
+                    }
+            if done % 50 == 0 or done == len(paths):
+                print(f"  {done}/{len(paths)} products processed, {len(best)} offers so far")
 
     print(f"\nUnique (variant, condition) offers: {len(best)}")
 

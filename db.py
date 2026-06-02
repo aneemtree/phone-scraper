@@ -175,36 +175,62 @@ def _mark_disappeared_conditions_oos(site, run_started_at):
     return inserted
 
 
-# ---------- Image self-hosting (first sighting only) ----------
+# ---------- Image hosting on Cloudflare R2 (first sighting only) ----------
+# R2 has zero egress fees, so serving images from it doesn't burn bandwidth the
+# way the Supabase Storage CDN did. Config via env; if unset, ensure_image falls
+# back to the store's source URL so local/unconfigured runs still work.
 import requests as _requests
 
-BUCKET = "phone-images"
+R2_ACCOUNT_ID = os.environ.get("R2_ACCOUNT_ID")
+R2_ACCESS_KEY_ID = os.environ.get("R2_ACCESS_KEY_ID")
+R2_SECRET_ACCESS_KEY = os.environ.get("R2_SECRET_ACCESS_KEY")
+R2_BUCKET = os.environ.get("R2_BUCKET", "phone-images")
+R2_PUBLIC_BASE_URL = (os.environ.get("R2_PUBLIC_BASE_URL") or "").rstrip("/")
+
+_r2_client = None
 
 
-def storage_public_url(path):
-    """Build the public URL for a file in our Supabase Storage bucket."""
-    base = SUPABASE_URL.rstrip("/")
-    return f"{base}/storage/v1/object/public/{BUCKET}/{path}"
+def _r2():
+    """Lazily build an S3 client pointed at R2, or None if not fully configured."""
+    global _r2_client
+    if not (R2_ACCOUNT_ID and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_PUBLIC_BASE_URL):
+        return None
+    if _r2_client is None:
+        import boto3
+        from botocore.config import Config
+        _r2_client = boto3.client(
+            "s3",
+            endpoint_url=f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+            aws_access_key_id=R2_ACCESS_KEY_ID,
+            aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+            region_name="auto",
+            config=Config(signature_version="s3v4"),
+        )
+    return _r2_client
+
+
+def r2_public_url(dest_path):
+    return f"{R2_PUBLIC_BASE_URL}/{dest_path}"
 
 
 def ensure_image(source_url, dest_path):
-    """Download source_url and upload to Storage at dest_path, but only if we
-    don't already have it. Returns our public URL (or None on failure).
-    First-sighting-only: if the file already exists, we skip the download."""
+    """Host source_url on Cloudflare R2 at dest_path (first sighting only) and
+    return its public URL. If R2 isn't configured, return the source URL so runs
+    still work without creds. Returns None only when there's nothing usable."""
     if not source_url:
         return None
-    # 1) Already stored? Check by trying to list/head the object.
-    try:
-        existing = supabase.storage.from_(BUCKET).list(
-            path="/".join(dest_path.split("/")[:-1]) or None
-        )
-        fname = dest_path.split("/")[-1]
-        if any(o.get("name") == fname for o in (existing or [])):
-            return storage_public_url(dest_path)
-    except Exception:
-        pass  # if listing fails, fall through and try to upload
+    client = _r2()
+    if client is None:
+        return source_url  # not configured — use the store's image directly
 
-    # 2) Download the image bytes
+    # 1) First-sighting check: skip the download if the object already exists.
+    try:
+        client.head_object(Bucket=R2_BUCKET, Key=dest_path)
+        return r2_public_url(dest_path)
+    except Exception:
+        pass  # not present (or head failed) — proceed to upload
+
+    # 2) Download the source image.
     try:
         r = _requests.get(source_url, timeout=30)
         r.raise_for_status()
@@ -212,17 +238,12 @@ def ensure_image(source_url, dest_path):
         content_type = r.headers.get("Content-Type", "image/jpeg")
     except Exception as e:
         print(f"    image download failed: {e}")
-        return None
+        return source_url  # keep the source URL as a fallback
 
-    # 3) Upload to Supabase Storage
+    # 3) Upload to R2.
     try:
-        supabase.storage.from_(BUCKET).upload(
-            dest_path, data, {"content-type": content_type, "upsert": "false"}
-        )
+        client.put_object(Bucket=R2_BUCKET, Key=dest_path, Body=data, ContentType=content_type)
     except Exception as e:
-        # If it already exists (race), treat as success.
-        if "exists" in str(e).lower() or "duplicate" in str(e).lower():
-            return storage_public_url(dest_path)
         print(f"    image upload failed: {e}")
-        return None
-    return storage_public_url(dest_path)
+        return source_url
+    return r2_public_url(dest_path)

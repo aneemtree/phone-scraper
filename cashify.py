@@ -25,7 +25,7 @@ import json
 import time
 import requests
 from playwright.sync_api import sync_playwright
-from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone
+from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone, parse_size_string
 from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
 from obs import init_sentry, log_error
 
@@ -161,14 +161,11 @@ def extract_variant_objects(payload, key='"availableInventory"'):
 
 
 def parse_ram_storage(value):
-    """Cashify stores the size as 'RAM / Storage' (e.g. '4 GB / 64 GB') or just
-    'Storage' (e.g. '64 GB'). Returns (ram, storage)."""
-    parts = [p.strip() for p in (value or "").split("/")]
-    if len(parts) == 2:
-        return parts[0].replace(" ", "").upper(), normalize_storage(parts[1])
-    if len(parts) == 1 and parts[0]:
-        return None, normalize_storage(parts[0])
-    return None, None
+    """Cashify stores the size as 'RAM / Storage' — e.g. '4 GB / 64 GB' or, for
+    some brands (Samsung), '12 GB RAM / 512 GB' with the literal word RAM. Use
+    the shared parse_size_string(), which strips the RAM keyword and applies the
+    RAM-vs-storage sanity rules — the old naive split produced ram='12GBRAM'."""
+    return parse_size_string(value)
 
 
 def fetch_product_variants(slug):

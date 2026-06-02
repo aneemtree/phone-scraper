@@ -4,3 +4,4 @@ supabase
 playwright
 python-dotenv
 sentry-sdk
+boto3

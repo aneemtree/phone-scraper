@@ -23,7 +23,7 @@ import re
 import time
 import requests
 from normalize import clean_model, normalize_storage, make_variant_key, parse_size_string, normalize_condition, is_phone, shopify_option_index
-from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
+from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer
 from obs import init_sentry, log_error
 
 SITE = "refit"
@@ -123,8 +123,8 @@ def scrape():
         variants = prod.get("variants", [])
         if not variants:
             continue
-        # Skip entirely if no variant is available (fully out of stock)
-        if not any(v.get("available", False) for v in variants):
+        # Skip fully-out-of-stock products UNLESS the monthly OOS catalog pass is on.
+        if not INCLUDE_OOS and not any(v.get("available", False) for v in variants):
             continue
 
         # Resolve which option slot holds grade vs size by NAME (positions vary
@@ -134,11 +134,13 @@ def scrape():
         grade_pos = opt_idx.get("grade", 1)
         size_pos = opt_idx.get("size")
 
-        # Group by (grade, size) → collect available (price, variant_id) so we can
-        # keep the lowest price AND link to that exact variant in the store.
-        groups = {}  # (grade, size) → list of (price, variant_id)
+        # Group by (grade, size) → in-stock and out-of-stock (price, variant_id)
+        # lists, so we can keep the lowest IN-STOCK price (or, in the OOS pass,
+        # the lowest OOS price) and link to that exact variant.
+        groups = {}  # (grade, size) → {"in": [...], "oos": [...]}
         for v in variants:
-            if not v.get("available", False):
+            avail = bool(v.get("available", False))
+            if not avail and not INCLUDE_OOS:
                 continue
             grade = normalize_condition((v.get(f"option{grade_pos}") or "").strip())
             if size_pos:
@@ -149,26 +151,31 @@ def scrape():
             price = float(price_paise) if price_paise else None
             if not price or not grade or not size:
                 continue
-            key = (grade, size)
-            groups.setdefault(key, []).append((price, v.get("id")))
+            g = groups.setdefault((grade, size), {"in": [], "oos": []})
+            (g["in"] if avail else g["oos"]).append((price, v.get("id")))
 
         if not groups:
-            # No available variants — skip entirely
             continue
 
         model = clean_model(title)
 
-        for (grade, size), priced in groups.items():
+        for (grade, size), g in groups.items():
             ram, storage = parse_size_string(size)
             variant_key = make_variant_key(model, storage, ram)
-            lowest_price, variant_id = min(priced, key=lambda pv: pv[0])
-            # Link to the exact lowest-price variant in the Shopify store.
+            # Prefer in-stock; fall back to OOS (only populated in the catalog pass).
+            if g["in"]:
+                lowest_price, variant_id = min(g["in"], key=lambda pv: pv[0])
+                availability = "in_stock"
+            elif g["oos"]:
+                lowest_price, variant_id = min(g["oos"], key=lambda pv: pv[0])
+                availability = "out_of_stock"
+            else:
+                continue
             variant_url = f"{url}?variant={variant_id}" if variant_id else url
-            # Tag Brand Box grades so they sit beside the regular grades.
             grade_label = f"Brand Box - {grade}" if is_brand_box else grade
 
             bkey = (variant_key, grade_label)
-            if bkey not in best or lowest_price < best[bkey]["price"]:
+            if better_offer(availability, lowest_price, best.get(bkey)):
                 best[bkey] = {
                     "model": model,
                     "storage": storage,
@@ -176,6 +183,7 @@ def scrape():
                     "variant_key": variant_key,
                     "grade": grade_label,
                     "price": lowest_price,
+                    "availability": availability,
                     "url": variant_url,
                     "image_url": img_url,
                     "warranty_months": warranty_months,
@@ -184,10 +192,12 @@ def scrape():
                     "name": f"{model} {storage or ''}".strip(),
                 }
 
-        print(f"  {title}: {len(groups)} available (grade, size) combos")
+        print(f"  {title}: {len(groups)} (grade, size) combos")
         time.sleep(DELAY)
 
-    # Save to Supabase
+    # Save to Supabase. A phone is in stock if any of its (variant,grade) offers
+    # is in stock; OOS-only phones are saved with in_stock=false.
+    in_stock_names = {o["name"] for o in best.values() if o["availability"] == "in_stock"}
     print(f"\nSaving {len(best)} (variant, grade) offers...")
     saved = 0
     for (vkey, grade), o in best.items():
@@ -200,17 +210,18 @@ def scrape():
 
         pid = save_phone(
             SITE, o["name"], o["url"], final_image,
-            o["model"], o["storage"], o["ram"], o["variant_key"]
+            o["model"], o["storage"], o["ram"], o["variant_key"],
+            in_stock=(o["name"] in in_stock_names),
         )
         save_price(
-            pid, o["price"], availability="in_stock",
+            pid, o["price"], availability=o["availability"],
             condition=grade, rating=o.get("rating"),
             review_count=o.get("review_count"),
             warranty_months=o.get("warranty_months"),
             url=o["url"],
         )
         saved += 1
-        print(f"  saved: {o['name']:35} [{grade:12}] ₹{o['price']:.0f}")
+        print(f"  saved: {o['name']:35} [{grade:12}] {o['availability']:12} ₹{o['price']:.0f}")
 
     # Phones not seen in this run -> out of stock (guarded against partial runs).
     mark_unseen_out_of_stock(SITE, run_started_at)

@@ -1,3 +1,9 @@
+## Merging to main
+NEVER merge to `main` autonomously. Develop, commit, and push freely on the
+feature branch, but only merge to `main` when the user EXPLICITLY asks for it.
+Verifying a change against real data is not permission to merge — wait for the
+user to say so.
+
 ## Keeping this file current
 ALWAYS update this CLAUDE.md whenever you merge a change to `main`. In the same
 work that does the merge, edit the relevant section(s) to reflect what changed
@@ -81,10 +87,14 @@ If two stores produce different variant_keys for the same physical phone
 (normalization didn't catch it), set canonical_key on both phones rows in
 Supabase to the same value. The offers view uses coalesce(canonical_key, variant_key).
 
-### Image hosting
-Download and host images in Supabase Storage bucket "phone-images" on FIRST
-sighting only. Path format: {site}/{variant_key}.jpg. Skip if already exists.
-Use ensure_image() from db.py.
+### Image hosting (Cloudflare R2)
+Host images on Cloudflare R2 (zero egress — Supabase's cached egress was the quota
+we blew; DB/storage size are tiny). ensure_image() in db.py uploads to R2 on FIRST
+sighting only (path `{site}/{variant_key}.jpg`, head_object skip) and returns the
+R2 public URL. Config via env: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
+R2_BUCKET, R2_PUBLIC_BASE_URL (passed at job level in all workflows). If unset,
+ensure_image falls back to the store's source image URL, so local/unconfigured runs
+still work. The DB stays on Supabase. One-off backfill: migrate_images_to_r2.py.
 
 ### Store metadata
 After adding a new store, add a row to the stores table:
@@ -112,7 +122,21 @@ Workflows (GitHub Actions):
     It does NOT run on push/merge. Runs all scrapers, then normalize_ai.py.
   - scrape-one.yml — manual single-site chooser (workflow_dispatch) for testing
     one scraper. Does NOT run normalize_ai.
+  - scrape-catalog.yml — MONTHLY (1st, 01:00 UTC) + dispatch. Runs the 6 JSON/RSC
+    scrapers with INCLUDE_OOS=1 then normalize_ai, purely for SEO.
 GitHub Actions cron is best-effort and often delayed (can be 1–3h late).
+
+### Out-of-stock catalog (SEO, monthly)
+When the `INCLUDE_OOS=1` env var is set (only scrape-catalog.yml sets it), the 6
+JSON/RSC scrapers (cashify, ovantica, refit, oldsold, mobilegoo, sahivalue) ALSO
+save out-of-stock variants: `phones.in_stock=false` + an `out_of_stock` price
+snapshot at the LOWEST selling price (not the strike price), so model pages exist
+for SEO even when nothing is buyable. Default runs are available-only (flag off).
+Shared helpers in db.py: `INCLUDE_OOS` and `better_offer(availability, price, cur)`
+(in_stock beats out_of_stock; else lower price). Per scraper, phone-level in_stock
+is set true iff any of that phone's (site+name) offers is in stock; it self-heals
+when a regular run later finds it available. ControlZ (DOM) and Xtracover are NOT
+wired for OOS yet — no cheap sold-out source.
 
 normalize_ai.py (runs AFTER all scrapers, full pipeline only): Pass 0 deletes
 non-phones (AI), Pass 1 cleans model names, Pass 2 sets canonical_key for

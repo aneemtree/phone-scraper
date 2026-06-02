@@ -1,0 +1,59 @@
+name: Monthly SEO catalog (include out-of-stock)
+
+# Once a month: run the JSON/RSC scrapers with INCLUDE_OOS=1 so out-of-stock
+# variants are also saved (in_stock=false, availability=out_of_stock). This keeps
+# model pages alive for SEO even when nothing is buyable. The regular twice-daily
+# scrape.yml stays available-only. ControlZ/Xtracover are not included (no cheap
+# OOS source yet).
+on:
+  schedule:
+    - cron: "0 1 1 * *"   # 01:00 UTC on the 1st of each month
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  catalog:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      INCLUDE_OOS: "1"
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Playwright browser
+        run: python -m playwright install --with-deps chromium
+
+      - name: Cashify (incl OOS)
+        run: python cashify.py
+      - name: Refit (incl OOS)
+        run: python refit.py
+      - name: Ovantica (incl OOS)
+        run: python ovantica.py
+      - name: Mobilegoo (incl OOS)
+        run: python mobilegoo.py
+      - name: Sahivalue (incl OOS)
+        run: python sahivalue.py
+      - name: OldSold (incl OOS)
+        run: python oldsold.py
+
+      - name: AI normalization (clean names + merge duplicates)
+        run: python normalize_ai.py

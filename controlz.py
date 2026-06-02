@@ -19,7 +19,7 @@ import time
 import requests
 from playwright.sync_api import sync_playwright
 from normalize import clean_model, normalize_storage, normalize_ram, make_variant_key, parse_size_string, normalize_condition, is_phone
-from db import save_phone, save_price, ensure_image, mark_site_oos
+from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
 
 SITE = "controlz"
 LISTING_URL = "https://www.controlz.world/store"
@@ -203,6 +203,8 @@ def scrape_product(page, slug):
 
 
 def scrape():
+    from datetime import datetime, timezone
+    run_started_at = datetime.now(timezone.utc).isoformat()
     mark_site_oos("controlz")
     products = get_product_slugs()
     print(f"Found {len(products)} products to visit.")
@@ -261,6 +263,10 @@ def scrape():
                    rating=o.get("rating"), review_count=o.get("review_count"))
         saved += 1
         print(f"  saved: {o['name']:28} [{cond:16}] ₹{o['price']:.0f}")
+
+    # Phones not seen in this run -> out of stock (guarded against partial runs).
+    mark_unseen_out_of_stock(SITE, run_started_at)
+
     print(f"\nDone. Saved {saved} (variant, condition) offers from {SITE}.")
 
 

@@ -217,8 +217,17 @@ def scrape():
             except Exception as e:
                 print(f"  [{idx}/{len(products)}] {slug}: ERROR {str(e)[:80]}")
                 time.sleep(DELAY_SECONDS); continue
+
+            # Filter non-phones by the ACTUAL product title, not just the slug.
+            # The slug-level is_phone() check at collection time misses items whose
+            # slug looks phone-ish but whose title is an accessory (e.g. a power
+            # bank tagged productType "phone" in the listing payload).
+            model = clean_model(page_title or parent_title)
+            if not model or not is_phone(model, slug):
+                print(f"  [{idx}/{len(products)}] {slug}: skipped (not a phone: {page_title!r})")
+                time.sleep(DELAY_SECONDS); continue
+
             for cond, st, price in rows:
-                model = clean_model(page_title or parent_title)
                 storage = normalize_storage(st) if st else None
                 ram = normalize_ram(parent_title)
                 vkey = make_variant_key(model, storage, ram)

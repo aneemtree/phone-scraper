@@ -54,6 +54,9 @@ normalize_storage() before calling make_variant_key(). Never save raw names.
 Key noise words already stripped: 5G, 4G, India, With Box, Open Box, Series,
 model numbers (SM-G991B), years (2021), Refurbished, Renewed, colors, etc.
 Brand casing: iPhone, iPad, OnePlus, POCO, iQOO are normalized.
+A trailing "+" is converted to the word "Plus" (Realme 12+ → Realme 12 Plus) so
+make_variant_key (which strips non-alphanumerics) keeps it distinct from the
+non-plus model instead of collapsing both to the same key.
 
 ### variant_key & RAM
 make_variant_key() uses model + storage ONLY (RAM excluded) so the same phone

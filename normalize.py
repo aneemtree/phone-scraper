@@ -259,6 +259,11 @@ def clean_model(title: str) -> str:
     """Strip storage, color, and refurb noise to get a clean model name."""
     t = title
     t = re.sub(r"\(.*?\)", " ", t)                      # remove (...) groups
+    # "+" is a model suffix (Realme 12+, Galaxy S21+) — turn it into the word
+    # "Plus" so it survives make_variant_key (which strips non-alphanumerics) and
+    # stays distinct from the non-plus model. The (?!\d) guard avoids touching
+    # RAM+storage notation like "8+256".
+    t = re.sub(r"\+(?!\d)", " Plus", t)
     # ControlZ condition grades ("Premium Renewed", "Saver Series") can lead or
     # trail the title/slug. Strip the grade words so they never leak into the
     # model name. The old "saver series.*$" rule deleted everything after it —

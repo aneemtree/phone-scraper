@@ -350,6 +350,8 @@ def clean_model(title: str) -> str:
     t = re.sub(r"\b(20[12][0-9])\b", " ", t)
     # "Series" standalone
     t = re.sub(r"\bseries\b", " ", t, flags=re.I)
+    # Stray "Storage" label left by comma-style titles ("… 128GB Storage")
+    t = re.sub(r"\bstorage\b", " ", t, flags=re.I)
     t = re.sub(r"[\-–|()]+", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
     # Normalize common casing: "Iphone"/"iphone" -> "iPhone"

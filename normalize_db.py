@@ -33,9 +33,18 @@ sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 def fetch_phones():
-    return sb.table("phones").select(
-        "id, model, storage, ram, variant_key, site, name"
-    ).order("model").execute().data
+    """Page through ALL phones — PostgREST caps a single select at 1000 rows, so
+    a plain query silently drops everything past the first page."""
+    rows, start = [], 0
+    while True:
+        chunk = (sb.table("phones")
+                 .select("id, model, storage, ram, variant_key, site, name")
+                 .order("id").range(start, start + 999).execute().data)
+        rows += chunk
+        if len(chunk) < 1000:
+            break
+        start += 1000
+    return rows
 
 
 def pass0_delete_nonphones(phones):

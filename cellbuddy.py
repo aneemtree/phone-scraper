@@ -33,7 +33,7 @@ import time
 import json
 import itertools
 import requests
-from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone
+from normalize import clean_model, normalize_storage, make_variant_key, is_phone
 from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer
 from obs import init_sentry, log_error
 
@@ -44,17 +44,24 @@ DELAY = 0.3
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 HEADERS = {"User-Agent": UA}
-UNKNOWN = normalize_condition("Refurbished")  # -> "Unknown Condition"
-
-
 def condition_for(prod):
-    """Condition from category membership (no grade axis on this store)."""
+    """Condition from category membership (no grade axis on this store).
+    CellBuddy prices its plain and "Refurbished" listings differently for the
+    same model+storage, so they are kept as SEPARATE conditions (both rows show):
+      - plain (no condition category) -> "Unknown Condition" (truly unlabelled)
+      - "Refurbished" category        -> "Refurbished" (kept literal here; the
+        global normalize_condition Refurbished->Unknown remap is for the OTHER
+        stores' vague default only)
+      - "No Face ID" / "No Touch ID"  -> kept as-is
+    """
     cats = {(c.get("name") or "") for c in (prod.get("categories") or [])}
     if "No Face ID" in cats:
         return "No Face ID"
     if "No Touch ID" in cats:
         return "No Touch ID"
-    return UNKNOWN  # plain or "Refurbished"
+    if "Refurbished" in cats:
+        return "Refurbished"
+    return "Unknown Condition"  # plain / unlabelled
 
 
 def model_from_name(name):
@@ -158,6 +165,65 @@ def ajax_matrix(product_id, storage_terms, color_terms, smap):
     return out
 
 
+def _api_range(prod):
+    """(min, max) advertised price in rupees from the Store API, or (None, None)."""
+    pr = prod.get("prices") or {}
+    def f(x):
+        try:
+            return float(x) / 100.0
+        except (TypeError, ValueError):
+            return None
+    rng = pr.get("price_range")
+    if rng:
+        return f(rng.get("min_amount")), f(rng.get("max_amount"))
+    p = f(pr.get("price"))
+    return p, p
+
+
+def _consistent(variations, prod):
+    """True if the embedded variation prices agree with the advertised Store API
+    price_range. Some CellBuddy products embed the WRONG variation matrix (e.g.
+    plain "iPhone 13" carries iPhone 13 *Pro* variations/prices); those are
+    rejected so we fall back to the advertised price instead of a phantom one."""
+    lo, hi = _api_range(prod)
+    if lo is None or hi is None:
+        return True  # nothing to validate against
+    prices = [v["price"] for v in variations]
+    if not prices:
+        return True
+    # Reject if the whole variation set sits outside the advertised band (±10%).
+    return not (min(prices) > hi * 1.1 or max(prices) < lo * 0.9)
+
+
+def _store_api_single(prod, smap):
+    """Advertised Store API min price as one offer at the cheapest storage term."""
+    try:
+        price = float((prod.get("prices") or {}).get("price")) / 100.0
+    except (TypeError, ValueError):
+        price = 0.0
+    if price <= 0:
+        return []
+    terms = [a for a in (prod.get("attributes") or []) if a.get("taxonomy") == "pa_storage"]
+    terms = terms[0].get("terms") if terms else []
+    # cheapest storage = smallest capacity
+    def gb(t):
+        s = smap.get(t.get("slug")) or normalize_storage(t.get("name")) or ""
+        m = re.search(r"(\d+)(TB|GB)", s)
+        return (int(m.group(1)) * (1024 if m.group(2) == "TB" else 1)) if m else 10**9
+    term = min(terms, key=gb) if terms else None
+    if term:
+        sslug = term.get("slug")
+        storage = smap.get(sslug) or normalize_storage(term.get("name"))
+    else:
+        sslug, storage = None, None
+    if not storage:
+        return []
+    badge = (prod.get("stock_availability") or {}).get("class", "")
+    in_stock = bool(prod.get("is_purchasable")) and badge == "in-stock"
+    return [{"storage": storage, "storage_slug": sslug, "color_slug": None,
+             "price": price, "in_stock": in_stock}]
+
+
 def variations_for(prod, smap):
     attrs = {a.get("taxonomy"): a for a in (prod.get("attributes") or [])}
     storage_terms = (attrs.get("pa_storage") or {}).get("terms") or []
@@ -172,29 +238,13 @@ def variations_for(prod, smap):
         except Exception:
             page = ""
         embedded = parse_embedded(page, smap)
-        if embedded is not None:
+        if embedded is None and storage_terms:  # no form -> enumerate via ajax
+            embedded = ajax_matrix(prod.get("id"), storage_terms, color_terms, smap)
+        if embedded and _consistent(embedded, prod):
             return embedded
-        if storage_terms:
-            return ajax_matrix(prod.get("id"), storage_terms, color_terms, smap)
+        # embedded missing or inconsistent with the advertised price -> fall back
 
-    # Single price path: Store API min price + the single storage term.
-    try:
-        price = float((prod.get("prices") or {}).get("price")) / 100.0
-    except (TypeError, ValueError):
-        price = 0.0
-    if price <= 0:
-        return []
-    if storage_terms:
-        sslug = storage_terms[0].get("slug")
-        storage = smap.get(sslug) or normalize_storage(storage_terms[0].get("name"))
-    else:
-        sslug, storage = None, None
-    if not storage:
-        return []
-    badge = (prod.get("stock_availability") or {}).get("class", "")
-    in_stock = bool(prod.get("is_purchasable")) and badge == "in-stock"
-    return [{"storage": storage, "storage_slug": sslug, "color_slug": None,
-             "price": price, "in_stock": in_stock}]
+    return _store_api_single(prod, smap)
 
 
 def scrape():

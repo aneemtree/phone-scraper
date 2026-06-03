@@ -41,22 +41,33 @@ jobs:
       - name: Install Playwright browser
         run: python -m playwright install --with-deps chromium
 
+      # Independent steps: a single store's failure shouldn't skip the rest or
+      # the normalize pass (`if: ${{ !cancelled() }}`); the job still fails if any do.
       - name: Cashify (incl OOS)
+        if: ${{ !cancelled() }}
         run: python cashify.py
       - name: Refit (incl OOS)
+        if: ${{ !cancelled() }}
         run: python refit.py
       - name: Ovantica (incl OOS)
+        if: ${{ !cancelled() }}
         run: python ovantica.py
       - name: Mobilegoo (incl OOS)
+        if: ${{ !cancelled() }}
         run: python mobilegoo.py
       - name: Sahivalue (incl OOS)
+        if: ${{ !cancelled() }}
         run: python sahivalue.py
       - name: OldSold (incl OOS)
+        if: ${{ !cancelled() }}
         run: python oldsold.py
       - name: ThePhoneHub (incl OOS)
+        if: ${{ !cancelled() }}
         run: python thephonehub.py
       - name: EasyPhones (incl OOS)
+        if: ${{ !cancelled() }}
         run: python easyphones.py
 
       - name: Normalize (clean names + recompute keys)
+        if: ${{ !cancelled() }}
         run: python normalize_db.py

@@ -167,6 +167,16 @@ HTTP/2 server sends GOAWAY after ~20k streams on one connection, which otherwise
 crashes a big OOS run mid-way. mark_site_oos also deletes in batches (one query
 per 100 phones) rather than one-per-phone.
 
+Separately, every DB call in db.py goes through `_exec(lambda: …)`, which retries
+transient connection drops (httpx.RemoteProtocolError "ConnectionTerminated" /
+GOAWAY, connect/read timeouts) on a freshly rebuilt client with backoff. Supabase
+will close a connection mid-request even well under the 20k-stream cap (idle /
+load-balancer recycle); without the retry a single drop crashed a scraper — and
+because the GitHub steps ran in sequence, the first crash skipped every later
+store. Each scraper step in scrape.yml/scrape-catalog.yml now also carries
+`if: ${{ !cancelled() }}` so one store's failure no longer skips the rest or the
+normalize pass (the job still reports failure for visibility).
+
 Non-phones: the scraper-level is_phone() only blocks NEW inserts; accessories
 already saved before a filter existed persist (mark_unseen flips them OOS, they
 don't get deleted), and become visible once the UI shows OOS. normalize_db.py

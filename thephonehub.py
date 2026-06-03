@@ -143,7 +143,10 @@ def scrape():
     for prod in products:
         raw_name = prod.get("name", "")
         model = title_to_model(raw_name)
-        if not model or not is_phone(model, prod.get("slug", "")):
+        # Filter on the CLEAN model, not the slug: product slugs embed marketing
+        # words ("50mp-ois-camera", "64mp-quad-camera") that collide with the
+        # non-phone keyword list and would wrongly drop real phones.
+        if not model or not is_phone(model):
             continue
 
         badge = (prod.get("stock_availability") or {}).get("class", "")

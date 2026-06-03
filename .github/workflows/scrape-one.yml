@@ -19,6 +19,7 @@ on:
           - mobilegoo
           - sahivalue
           - oldsold
+          - thephonehub
 
 permissions:
   contents: read

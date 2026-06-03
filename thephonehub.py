@@ -56,7 +56,7 @@ def title_to_model(name):
     if "(" in name:
         head = name.split("(", 1)[0]
     else:
-        head = re.split(r"[–—|]", name, 1)[0]
+        head = re.split(r"[–—|]", name, maxsplit=1)[0]
     return clean_model(head)
 
 

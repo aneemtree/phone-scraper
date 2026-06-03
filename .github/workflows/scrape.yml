@@ -87,6 +87,12 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python oldsold.py
 
+      - name: Run ThePhoneHub scraper
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python thephonehub.py
+
       - name: Normalize (clean names + recompute keys)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

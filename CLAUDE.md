@@ -108,13 +108,27 @@ Upload the store logo to Supabase Storage "logos" bucket and update logo_url.
 
 ### Scrapers & pipeline
 Active scrapers: cashify, controlz, refit, xtracover, ovantica, mobilegoo,
-sahivalue, oldsold. ControlZ filters non-phones by the actual product TITLE via
-is_phone() (a slug-only check missed accessories like power banks).
+sahivalue, oldsold, thephonehub. ControlZ filters non-phones by the actual
+product TITLE via is_phone() (a slug-only check missed accessories like power
+banks); thephonehub filters on the CLEAN model, not the slug, because its slugs
+embed marketing words (e.g. "50mp-ois-camera") that collide with is_phone().
 
 Per-site data source / speed:
   - cashify, ovantica: requests-only — parse the product RSC payload; Playwright
     used ONLY for the listing/token (ovantica thread-pools the product fetches).
   - refit, oldsold: Shopify products.json (requests-only).
+  - thephonehub: WooCommerce, requests-only. Listing + metadata from the public
+    Store API (/wp-json/wc/store/v1/products?category=160). Per-variant
+    price/stock/grade from the product page's embedded `data-product_variations`
+    JSON; above WooCommerce's ajax threshold that attribute is the string "False"
+    so we enumerate storage×grade×color via `?wc-ajax=get_variation`; a few
+    single-variant products embed no form and fall back to the Store API min
+    price + storage parsed from the title. Grades (Fair/Good/Superb, same vocab
+    as Cashify) exist on SOME products only — one row per (storage, grade), else
+    "Refurbished". Availability = is_purchasable + the stock badge + per-variation
+    flags; the top-level is_in_stock is phantom (always true) and NOT trusted.
+    Prices: variation display_price is rupees; Store API prices.price is minor
+    units (÷100). Deep-link via ?attribute_pa_storage/_grade/_color.
   - xtracover: one Playwright session to scroll the listing; no product pages.
   - controlz: NO usable product API (client calls are analytics; the RSC
     variant data is server-rendered with incomplete `$`-references — storage is
@@ -127,14 +141,14 @@ Workflows (GitHub Actions):
     It does NOT run on push/merge. Runs all scrapers, then normalize_db.py.
   - scrape-one.yml — manual single-site chooser (workflow_dispatch) for testing
     one scraper. Does NOT run normalize_db.
-  - scrape-catalog.yml — MONTHLY (1st, 01:00 UTC) + dispatch. Runs the 6 JSON/RSC
+  - scrape-catalog.yml — MONTHLY (1st, 01:00 UTC) + dispatch. Runs the 7 JSON/RSC
     scrapers with INCLUDE_OOS=1 then normalize_db, purely for SEO.
 GitHub Actions cron is best-effort and often delayed (can be 1–3h late).
 
 ### Out-of-stock catalog (SEO, monthly)
-When the `INCLUDE_OOS=1` env var is set (only scrape-catalog.yml sets it), the 6
-JSON/RSC scrapers (cashify, ovantica, refit, oldsold, mobilegoo, sahivalue) ALSO
-save out-of-stock variants: `phones.in_stock=false` + an `out_of_stock` price
+When the `INCLUDE_OOS=1` env var is set (only scrape-catalog.yml sets it), the 7
+JSON/RSC scrapers (cashify, ovantica, refit, oldsold, mobilegoo, sahivalue,
+thephonehub) ALSO save out-of-stock variants: `phones.in_stock=false` + an `out_of_stock` price
 snapshot at the LOWEST selling price (not the strike price), so model pages exist
 for SEO even when nothing is buyable. Default runs are available-only (flag off).
 Shared helpers in db.py: `INCLUDE_OOS` and `better_offer(availability, price, cur)`

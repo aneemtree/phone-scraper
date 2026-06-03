@@ -53,6 +53,8 @@ jobs:
         run: python sahivalue.py
       - name: OldSold (incl OOS)
         run: python oldsold.py
+      - name: ThePhoneHub (incl OOS)
+        run: python thephonehub.py
 
       - name: Normalize (clean names + recompute keys)
         run: python normalize_db.py

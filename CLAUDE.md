@@ -138,6 +138,18 @@ is set true iff any of that phone's (site+name) offers is in stock; it self-heal
 when a regular run later finds it available. ControlZ (DOM) and Xtracover are NOT
 wired for OOS yet — no cheap sold-out source.
 
+At catalog scale the per-row DB writes are huge, so db.py cycles the Supabase
+client onto a fresh connection every ~6000 write ops (`_note_op`) — Supabase's
+HTTP/2 server sends GOAWAY after ~20k streams on one connection, which otherwise
+crashes a big OOS run mid-way. mark_site_oos also deletes in batches (one query
+per 100 phones) rather than one-per-phone.
+
+Non-phones: the scraper-level is_phone() only blocks NEW inserts; accessories
+already saved before a filter existed persist (mark_unseen flips them OOS, they
+don't get deleted), and become visible once the UI shows OOS. normalize_ai Pass 0
+(AI) is the only auto-deleter and is cautious — purge leftovers with a SQL match
+on accessory keywords if they surface.
+
 normalize_ai.py (runs AFTER all scrapers, full pipeline only): Pass 0 deletes
 non-phones (AI), Pass 1 cleans model names, Pass 2 sets canonical_key for
 cross-store duplicates (groups by model+storage, RAM-agnostic).

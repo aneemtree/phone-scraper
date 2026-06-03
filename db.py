@@ -24,6 +24,22 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 INCLUDE_OOS = os.environ.get("INCLUDE_OOS") == "1"
 
 
+# Supabase/PostgREST serves over HTTP/2, which caps a single connection at ~20k
+# streams (requests) before the server sends GOAWAY and the connection dies. The
+# monthly OOS catalog makes far more DB calls than that, so proactively rebuild
+# the client onto a fresh connection every few thousand write ops.
+_ops_since_reconnect = 0
+_OPS_PER_CONNECTION = 6000
+
+
+def _note_op(n=1):
+    global _ops_since_reconnect, supabase
+    _ops_since_reconnect += n
+    if _ops_since_reconnect >= _OPS_PER_CONNECTION:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        _ops_since_reconnect = 0
+
+
 def better_offer(new_availability, new_price, cur):
     """Pick the offer to keep for a (variant_key, condition). in_stock beats
     out_of_stock; within the same availability the lower price wins. `cur` is the
@@ -59,6 +75,7 @@ def save_phone(site, name, url, image_url, model, storage, ram, variant_key, in_
             "storage": storage, "ram": ram, "variant_key": variant_key,
             "last_seen_at": now, "in_stock": in_stock,
         }).eq("id", pid).execute()
+        _note_op(2)
         return pid
 
     inserted = supabase.table("phones").insert({
@@ -66,6 +83,7 @@ def save_phone(site, name, url, image_url, model, storage, ram, variant_key, in_
         "model": model, "storage": storage, "ram": ram, "variant_key": variant_key,
         "last_seen_at": now, "in_stock": in_stock,
     }).execute()
+    _note_op(2)
     return inserted.data[0]["id"]
 
 
@@ -77,6 +95,7 @@ def save_price(phone_id, price, availability="in_stock", condition="Premium Rene
         "condition": condition, "rating": rating, "review_count": review_count,
         "warranty_months": warranty_months, "url": url,
     }).execute()
+    _note_op(1)
 
 
 
@@ -93,13 +112,13 @@ def mark_site_oos(site):
     phone_ids = [p["id"] for p in (phones.data or [])]
     if not phone_ids:
         return 0
-    deleted = 0
+    # One delete per 100 phones (was one-per-phone — thousands of requests that
+    # helped exhaust the HTTP/2 connection on big OOS runs).
     for i in range(0, len(phone_ids), 100):
         batch_ids = phone_ids[i:i+100]
-        for pid in batch_ids:
-            supabase.table("prices").delete().eq("phone_id", pid).gte("scraped_at", today).execute()
-            deleted += 1
-    return deleted
+        supabase.table("prices").delete().in_("phone_id", batch_ids).gte("scraped_at", today).execute()
+        _note_op(1)
+    return len(phone_ids)
 
 
 def mark_unseen_out_of_stock(site, run_started_at, min_seen_ratio=0.5):

@@ -108,7 +108,7 @@ Upload the store logo to Supabase Storage "logos" bucket and update logo_url.
 
 ### Scrapers & pipeline
 Active scrapers: cashify, controlz, refit, xtracover, ovantica, mobilegoo,
-sahivalue, oldsold, thephonehub. ControlZ filters non-phones by the actual
+sahivalue, oldsold, thephonehub, easyphones. ControlZ filters non-phones by the actual
 product TITLE via is_phone() (a slug-only check missed accessories like power
 banks); thephonehub filters on the CLEAN model, not the slug, because its slugs
 embed marketing words (e.g. "50mp-ois-camera") that collide with is_phone().
@@ -116,7 +116,11 @@ embed marketing words (e.g. "50mp-ois-camera") that collide with is_phone().
 Per-site data source / speed:
   - cashify, ovantica: requests-only — parse the product RSC payload; Playwright
     used ONLY for the listing/token (ovantica thread-pools the product fetches).
-  - refit, oldsold: Shopify products.json (requests-only).
+  - refit, oldsold, easyphones: Shopify products.json (requests-only). easyphones
+    options are Color/Colour + Storage + Condition/Grade (slot order/spelling
+    vary → resolved by name via shopify_option_index); grade qualifier in parens
+    is stripped ("Superb (Like-New)" → "Superb") and a bare "Like-New" folds into
+    "Superb"; prices are rupees; deep-link ?variant=<id>.
   - thephonehub: WooCommerce, requests-only. Listing + metadata from the public
     Store API (/wp-json/wc/store/v1/products?category=160). Per-variant
     price/stock/grade from the product page's embedded `data-product_variations`
@@ -141,14 +145,14 @@ Workflows (GitHub Actions):
     It does NOT run on push/merge. Runs all scrapers, then normalize_db.py.
   - scrape-one.yml — manual single-site chooser (workflow_dispatch) for testing
     one scraper. Does NOT run normalize_db.
-  - scrape-catalog.yml — MONTHLY (1st, 01:00 UTC) + dispatch. Runs the 7 JSON/RSC
+  - scrape-catalog.yml — MONTHLY (1st, 01:00 UTC) + dispatch. Runs the 8 JSON/RSC
     scrapers with INCLUDE_OOS=1 then normalize_db, purely for SEO.
 GitHub Actions cron is best-effort and often delayed (can be 1–3h late).
 
 ### Out-of-stock catalog (SEO, monthly)
-When the `INCLUDE_OOS=1` env var is set (only scrape-catalog.yml sets it), the 7
+When the `INCLUDE_OOS=1` env var is set (only scrape-catalog.yml sets it), the 8
 JSON/RSC scrapers (cashify, ovantica, refit, oldsold, mobilegoo, sahivalue,
-thephonehub) ALSO save out-of-stock variants: `phones.in_stock=false` + an `out_of_stock` price
+thephonehub, easyphones) ALSO save out-of-stock variants: `phones.in_stock=false` + an `out_of_stock` price
 snapshot at the LOWEST selling price (not the strike price), so model pages exist
 for SEO even when nothing is buyable. Default runs are available-only (flag off).
 Shared helpers in db.py: `INCLUDE_OOS` and `better_offer(availability, price, cur)`

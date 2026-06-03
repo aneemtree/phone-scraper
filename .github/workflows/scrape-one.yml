@@ -20,6 +20,7 @@ on:
           - sahivalue
           - oldsold
           - thephonehub
+          - easyphones
 
 permissions:
   contents: read

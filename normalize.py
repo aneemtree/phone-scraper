@@ -352,6 +352,11 @@ def clean_model(title: str) -> str:
     t = re.sub(r"\bseries\b", " ", t, flags=re.I)
     # Stray "Storage" label left by comma-style titles ("… 128GB Storage")
     t = re.sub(r"\bstorage\b", " ", t, flags=re.I)
+    # Marketing tokens some stores append ("Galaxy S25 Ultra AI New", "Z Fold5
+    # AI") — strip standalone "AI"/"New" so they don't fragment the model from
+    # the same phone on other stores. No real phone model is the bare word
+    # "AI"/"New" (Galaxy "AI" branding is marketing; "renewed" lacks the boundary).
+    t = re.sub(r"\b(ai|new)\b", " ", t, flags=re.I)
     t = re.sub(r"[\-–|()]+", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
     # Normalize common casing: "Iphone"/"iphone" -> "iPhone"
@@ -377,6 +382,10 @@ def clean_model(title: str) -> str:
     # overwritten (e.g. "Poco" -> "POCO", "Iqoo" -> "iQOO", "Oppo" -> "OPPO").
     for token, cased in BRAND_CASE.items():
         t = re.sub(rf"\b{token}\b", cased, t, flags=re.I)
+    # Uppercase the FE ("Fan Edition") suffix regardless of how a store cased it
+    # ("S20 Fe" -> "S20 FE") so it matches the same phone elsewhere. The
+    # title-casing above lower-cases mixed-case "Fe"; this restores it.
+    t = re.sub(r"\bfe\b", "FE", t, flags=re.I)
     return t
 
 

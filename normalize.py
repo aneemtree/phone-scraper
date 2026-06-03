@@ -117,6 +117,10 @@ def normalize_condition(condition: str | None) -> str | None:
     c = re.sub(r"\bRenewed\b", "Renewed", c)
     c = re.sub(r"\bRefurbished\b", "Refurbished", c)
     c = re.sub(r"\bSuperb\b", "Superb", c)
+    # "Refurbished" is too vague to compare across stores (it's the default label
+    # for ungraded stock), so it's recorded as "Unknown Condition" everywhere.
+    if c == "Refurbished":
+        return "Unknown Condition"
     return c
 
 
@@ -386,6 +390,9 @@ def clean_model(title: str) -> str:
     # ("S20 Fe" -> "S20 FE") so it matches the same phone elsewhere. The
     # title-casing above lower-cases mixed-case "Fe"; this restores it.
     t = re.sub(r"\bfe\b", "FE", t, flags=re.I)
+    # iPhone X-series suffixes: normalize "Xs"/"Xr" casing to "XS"/"XR".
+    t = re.sub(r"\bxs\b", "XS", t, flags=re.I)
+    t = re.sub(r"\bxr\b", "XR", t, flags=re.I)
     return t
 
 

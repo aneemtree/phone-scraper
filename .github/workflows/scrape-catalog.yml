@@ -73,6 +73,9 @@ jobs:
       - name: Grest (incl OOS)
         if: ${{ !cancelled() }}
         run: python grest.py
+      - name: CellBuddy (incl OOS)
+        if: ${{ !cancelled() }}
+        run: python cellbuddy.py
 
       - name: Normalize (clean names + recompute keys)
         if: ${{ !cancelled() }}

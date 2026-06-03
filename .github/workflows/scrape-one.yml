@@ -23,6 +23,7 @@ on:
           - easyphones
           - tetro
           - grest
+          - cellbuddy
 
 permissions:
   contents: read

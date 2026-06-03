@@ -20,7 +20,6 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       INCLUDE_OOS: "1"
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -54,6 +53,8 @@ jobs:
         run: python sahivalue.py
       - name: OldSold (incl OOS)
         run: python oldsold.py
+      - name: ThePhoneHub (incl OOS)
+        run: python thephonehub.py
 
-      - name: AI normalization (clean names + merge duplicates)
-        run: python normalize_ai.py
+      - name: Normalize (clean names + recompute keys)
+        run: python normalize_db.py

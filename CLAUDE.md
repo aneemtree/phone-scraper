@@ -64,8 +64,10 @@ groups across stores, since most stores don't surface RAM. Exception: oldsold
 sells the same storage at different RAM (8GB/256GB vs 12GB/256GB) at different
 prices, so its scraper keys the dedup dict by (variant_key, ram, condition) and
 folds RAM into the saved `name` to keep both as distinct offers. They still share
-the storage-only variant_key (so they sit under one cross-store card). Note:
-normalize_ai Pass 2 groups by model+storage too (RAM-agnostic).
+the storage-only variant_key (so they sit under one cross-store card). Because
+the key is deterministic and storage-only, the same physical phone already shares
+one variant_key across stores once names are clean — so cross-store grouping needs
+no separate merge step.
 
 ### Out-of-stock tracking
 Availability is tracked on the `phones` table: `in_stock` (bool), `last_seen_at`,
@@ -122,11 +124,11 @@ Per-site data source / speed:
 
 Workflows (GitHub Actions):
   - scrape.yml — full run, `schedule` only (6 AM & 3 PM IST) + workflow_dispatch.
-    It does NOT run on push/merge. Runs all scrapers, then normalize_ai.py.
+    It does NOT run on push/merge. Runs all scrapers, then normalize_db.py.
   - scrape-one.yml — manual single-site chooser (workflow_dispatch) for testing
-    one scraper. Does NOT run normalize_ai.
+    one scraper. Does NOT run normalize_db.
   - scrape-catalog.yml — MONTHLY (1st, 01:00 UTC) + dispatch. Runs the 6 JSON/RSC
-    scrapers with INCLUDE_OOS=1 then normalize_ai, purely for SEO.
+    scrapers with INCLUDE_OOS=1 then normalize_db, purely for SEO.
 GitHub Actions cron is best-effort and often delayed (can be 1–3h late).
 
 ### Out-of-stock catalog (SEO, monthly)
@@ -149,13 +151,21 @@ per 100 phones) rather than one-per-phone.
 
 Non-phones: the scraper-level is_phone() only blocks NEW inserts; accessories
 already saved before a filter existed persist (mark_unseen flips them OOS, they
-don't get deleted), and become visible once the UI shows OOS. normalize_ai Pass 0
-(AI) is the only auto-deleter and is cautious — purge leftovers with a SQL match
-on accessory keywords if they surface.
+don't get deleted), and become visible once the UI shows OOS. normalize_db.py
+Pass 0 deletes them deterministically (same is_phone keyword check) — keep the
+NON_PHONE_KEYWORDS list in normalize.py current and add new accessory words as
+they surface (no SQL purge needed for known keywords).
 
-normalize_ai.py (runs AFTER all scrapers, full pipeline only): Pass 0 deletes
-non-phones (AI), Pass 1 cleans model names, Pass 2 sets canonical_key for
-cross-store duplicates (groups by model+storage, RAM-agnostic).
+normalize_db.py (runs AFTER all scrapers, full pipeline + monthly catalog):
+deterministic, no AI/API key. Pass 0 deletes non-phones via is_phone(); Pass 1
+re-runs clean_model()/make_variant_key() over every row so existing data picks up
+normalization-rule improvements in place (recomputes model + variant_key; leaves
+the raw `name`). Cross-store duplicate merging is NOT a separate step — the
+deterministic storage-only variant_key already groups the same phone across stores
+once names are clean. canonical_key stays for the manual merge fallback only.
+This replaced the old AI-based normalize_ai.py (dropped): "learn from what we have
+and keep adding cases" — when a bad name/leak shows up, add the rule to
+clean_model() (e.g. a color to COLORS, a noise word) and the next run self-heals.
 
 ### Error logging (Sentry)
 Optional Sentry error logging lives in obs.py: `init_sentry(SITE)` +

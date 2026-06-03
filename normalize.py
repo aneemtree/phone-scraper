@@ -8,6 +8,12 @@ import re
 # Common colors to strip from model names. Multi-word ones MUST come first
 # so "Phantom Black" is removed before "Black".
 COLORS = [
+    # Multi-word marketing colors MUST come first so they're removed whole before
+    # a single-word rule (e.g. "celestial magic" before "magic" would ever match,
+    # and so "magic" is only ever stripped as part of a color phrase — never on
+    # its own, which would wrongly eat the Honor *Magic* model line).
+    "celestial magic", "celatial magic", "mystic bronze", "mystic green",
+    "mystic white", "mystic black", "mystic blue", "mystic silver",
     "phantom black", "phantom white", "deep purple", "space black", "space gray",
     "space grey", "rose gold", "midnight", "starlight", "graphite", "sierra blue",
     "alpine green", "pacific blue", "phantom", "titanium", "black", "white",
@@ -15,6 +21,7 @@ COLORS = [
     "yellow", "coral", "lavender", "cream", "mint",
     "natural", "natural titanium", "blue titanium", "white titanium",
     "black titanium", "desert titanium", "aurora", "phantom violet",
+    "mystic", "celestial", "celatial",
 ]
 
 
@@ -272,8 +279,13 @@ def clean_model(title: str) -> str:
     # remaining "premium"/"saver"/"series" grade words here.
     t = re.sub(r"\b(premium[\s_-]+renewed|saver[\s_-]+series|premium|saver|series)\b", " ", t, flags=re.I)
     t = re.sub(r"\b\d+\s?(GB|TB)\b", " ", t, flags=re.I) # storage
+    # Stray "RAM" label with no number (the number was already stripped as storage
+    # above, e.g. "Note 20 RAM , Mystic"). Remove the orphaned keyword + any comma
+    # left dangling so it never leaks into the model name.
+    t = re.sub(r"\bram\b", " ", t, flags=re.I)
     for c in COLORS:                                     # colors (longest first)
         t = re.sub(rf"\b{re.escape(c)}\b", " ", t, flags=re.I)
+    t = re.sub(r"\s*,\s*", " ", t)                       # drop orphaned commas
     t = re.sub(r"\b(refurbished|renewed|pre-?owned|open\s*box|certified|certified refurbished)\b", " ", t, flags=re.I)
     t = re.sub(r"^buy\s+", "", t, flags=re.I)  # strip leading "Buy " prefix
 
@@ -317,6 +329,10 @@ def clean_model(title: str) -> str:
         if re.match(rf"^{re.escape(parent)}\s", t, flags=re.I):
             continue  # already starts with the canonical parent brand
         t = re.sub(rf"^{token}\s", prefix + " ", t, flags=re.I)
+    # "Mi" before "Redmi" is a redundant double sub-brand ("Xiaomi Mi Redmi K20"
+    # / "Mi Redmi Note 10"). Redmi is its own line — drop the stray "Mi" so it
+    # collapses to "Xiaomi Redmi ..." and matches the other stores' key.
+    t = re.sub(r"\bMi\s+(?=Redmi\b)", "", t, flags=re.I)
     t = re.sub(r"\bunbox(?:ed)?\b", " ", t, flags=re.I)  # strip unboxed/unbox
     t = re.sub(r"[/\\|]+$", "", t).strip()  # strip trailing slashes/pipes
     t = re.sub(r"\b(controlz|cashify|refit|xtracover|croma)\b", " ", t, flags=re.I)

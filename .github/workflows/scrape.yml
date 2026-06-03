@@ -111,6 +111,13 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python easyphones.py
 
+      - name: Run Tetro scraper
+        if: ${{ !cancelled() }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python tetro.py
+
       - name: Normalize (clean names + recompute keys)
         if: ${{ !cancelled() }}
         env:

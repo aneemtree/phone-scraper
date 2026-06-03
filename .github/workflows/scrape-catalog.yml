@@ -67,6 +67,9 @@ jobs:
       - name: EasyPhones (incl OOS)
         if: ${{ !cancelled() }}
         run: python easyphones.py
+      - name: Tetro (incl OOS)
+        if: ${{ !cancelled() }}
+        run: python tetro.py
 
       - name: Normalize (clean names + recompute keys)
         if: ${{ !cancelled() }}

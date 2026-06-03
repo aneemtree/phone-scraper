@@ -21,6 +21,7 @@ on:
           - oldsold
           - thephonehub
           - easyphones
+          - tetro
 
 permissions:
   contents: read

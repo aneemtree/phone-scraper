@@ -3,7 +3,9 @@ Database helper. Connects to Supabase and saves phones + price snapshots.
 All scrapers import from here.
 """
 import os
+import time as _time
 from datetime import datetime, timezone
+import httpx
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
@@ -40,6 +42,34 @@ def _note_op(n=1):
         _ops_since_reconnect = 0
 
 
+# Supabase occasionally drops the HTTP/2 connection mid-request (a graceful
+# GOAWAY → httpx.RemoteProtocolError "ConnectionTerminated", or a transient
+# network blip). A single such drop used to crash a whole scraper (and, in the
+# GitHub job, skip every later store). _exec retries the operation on a freshly
+# rebuilt client so a transient drop self-heals instead of aborting the run.
+_TRANSIENT = (
+    httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError,
+    httpx.WriteError, httpx.PoolTimeout, httpx.ReadTimeout, httpx.ConnectTimeout,
+)
+
+
+def _exec(build, tries=4):
+    """Run a query-builder lambda, retrying transient connection drops on a new
+    client. `build` MUST construct and execute the query referencing the global
+    `supabase` (not a captured client) so each retry uses the rebuilt one."""
+    global supabase
+    delay = 1
+    for attempt in range(tries):
+        try:
+            return build()
+        except _TRANSIENT:
+            if attempt == tries - 1:
+                raise
+            supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+            _time.sleep(delay)
+            delay = min(delay * 2, 8)
+
+
 def better_offer(new_availability, new_price, cur):
     """Pick the offer to keep for a (variant_key, condition). in_stock beats
     out_of_stock; within the same availability the lower price wins. `cur` is the
@@ -59,30 +89,30 @@ def save_phone(site, name, url, image_url, model, storage, ram, variant_key, in_
     'name' stays the raw site title; model/storage/ram/variant_key are normalized.
     in_stock=False is used by the monthly OOS catalog pass.
     """
-    existing = (
+    existing = _exec(lambda: (
         supabase.table("phones")
         .select("id")
         .eq("site", site)
         .eq("name", name)
         .execute()
-    )
+    ))
     now = _utcnow_iso()
     if existing.data:
         pid = existing.data[0]["id"]
         # Stamp last_seen_at for the OOS sweep; in_stock reflects this sighting.
-        supabase.table("phones").update({
+        _exec(lambda: supabase.table("phones").update({
             "url": url, "image_url": image_url, "model": model,
             "storage": storage, "ram": ram, "variant_key": variant_key,
             "last_seen_at": now, "in_stock": in_stock,
-        }).eq("id", pid).execute()
+        }).eq("id", pid).execute())
         _note_op(2)
         return pid
 
-    inserted = supabase.table("phones").insert({
+    inserted = _exec(lambda: supabase.table("phones").insert({
         "site": site, "name": name, "url": url, "image_url": image_url,
         "model": model, "storage": storage, "ram": ram, "variant_key": variant_key,
         "last_seen_at": now, "in_stock": in_stock,
-    }).execute()
+    }).execute())
     _note_op(2)
     return inserted.data[0]["id"]
 
@@ -90,11 +120,11 @@ def save_phone(site, name, url, image_url, model, storage, ram, variant_key, in_
 def save_price(phone_id, price, availability="in_stock", condition="Premium Renewed",
                rating=None, review_count=None, warranty_months=None, url=None):
     """Append a price snapshot (one per condition). Never overwrites; history accrues."""
-    supabase.table("prices").insert({
+    _exec(lambda: supabase.table("prices").insert({
         "phone_id": phone_id, "price": price, "availability": availability,
         "condition": condition, "rating": rating, "review_count": review_count,
         "warranty_months": warranty_months, "url": url,
-    }).execute()
+    }).execute())
     _note_op(1)
 
 
@@ -108,7 +138,7 @@ def mark_site_oos(site):
     from datetime import datetime, timezone
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     # Get all phone IDs for this site
-    phones = supabase.table("phones").select("id").eq("site", site).execute()
+    phones = _exec(lambda: supabase.table("phones").select("id").eq("site", site).execute())
     phone_ids = [p["id"] for p in (phones.data or [])]
     if not phone_ids:
         return 0
@@ -116,7 +146,7 @@ def mark_site_oos(site):
     # helped exhaust the HTTP/2 connection on big OOS runs).
     for i in range(0, len(phone_ids), 100):
         batch_ids = phone_ids[i:i+100]
-        supabase.table("prices").delete().in_("phone_id", batch_ids).gte("scraped_at", today).execute()
+        _exec(lambda b=batch_ids: supabase.table("prices").delete().in_("phone_id", b).gte("scraped_at", today).execute())
         _note_op(1)
     return len(phone_ids)
 
@@ -132,20 +162,20 @@ def mark_unseen_out_of_stock(site, run_started_at, min_seen_ratio=0.5):
     sweep is skipped — so a crashed or partial run can't wipe a whole store to
     out of stock. Phones found this run are set back in_stock=true by save_phone.
     """
-    total = (supabase.table("phones").select("id", count="exact")
-             .eq("site", site).execute().count or 0)
+    total = (_exec(lambda: supabase.table("phones").select("id", count="exact")
+             .eq("site", site).execute()).count or 0)
     if total == 0:
         return 0
-    seen = (supabase.table("phones").select("id", count="exact")
-            .eq("site", site).gte("last_seen_at", run_started_at).execute().count or 0)
+    seen = (_exec(lambda: supabase.table("phones").select("id", count="exact")
+            .eq("site", site).gte("last_seen_at", run_started_at).execute()).count or 0)
     if seen < max(1, int(total * min_seen_ratio)):
         print(f"  [oos] {site}: only {seen}/{total} phones seen this run — skipping OOS sweep (guard)")
         return 0
     # Not seen this run -> out of stock (older last_seen_at, or never stamped).
-    supabase.table("phones").update({"in_stock": False}).eq("site", site).lt("last_seen_at", run_started_at).execute()
-    supabase.table("phones").update({"in_stock": False}).eq("site", site).is_("last_seen_at", "null").execute()
-    still_in = (supabase.table("phones").select("id", count="exact")
-                .eq("site", site).eq("in_stock", True).execute().count or 0)
+    _exec(lambda: supabase.table("phones").update({"in_stock": False}).eq("site", site).lt("last_seen_at", run_started_at).execute())
+    _exec(lambda: supabase.table("phones").update({"in_stock": False}).eq("site", site).is_("last_seen_at", "null").execute())
+    still_in = (_exec(lambda: supabase.table("phones").select("id", count="exact")
+                .eq("site", site).eq("in_stock", True).execute()).count or 0)
     n = total - still_in
     # Per-condition availability: a phone can be in stock while one of its grades
     # is sold out. Mark grades not refreshed this run as out_of_stock too.
@@ -161,8 +191,8 @@ def _mark_disappeared_conditions_oos(site, run_started_at):
     so a sold-out condition stops showing as in stock while its sibling grades
     stay available. Idempotent: skips conditions whose latest row is already OOS.
     """
-    seen = (supabase.table("phones").select("id")
-            .eq("site", site).gte("last_seen_at", run_started_at).execute().data or [])
+    seen = (_exec(lambda: supabase.table("phones").select("id")
+            .eq("site", site).gte("last_seen_at", run_started_at).execute()).data or [])
     seen_ids = [p["id"] for p in seen]
     inserted = 0
     for i in range(0, len(seen_ids), 50):
@@ -170,11 +200,11 @@ def _mark_disappeared_conditions_oos(site, run_started_at):
         # (phone, condition) combos that got a fresh row this run (server-side
         # timestamp compare avoids string-format pitfalls).
         fresh = {(r["phone_id"], r["condition"]) for r in
-                 (supabase.table("prices").select("phone_id, condition")
-                  .in_("phone_id", batch).gte("scraped_at", run_started_at).execute().data or [])}
-        all_rows = (supabase.table("prices")
+                 (_exec(lambda b=batch: supabase.table("prices").select("phone_id, condition")
+                  .in_("phone_id", b).gte("scraped_at", run_started_at).execute()).data or [])}
+        all_rows = (_exec(lambda b=batch: supabase.table("prices")
                     .select("phone_id, condition, price, availability, scraped_at, url")
-                    .in_("phone_id", batch).execute().data or [])
+                    .in_("phone_id", b).execute()).data or [])
         # latest row per (phone, condition) — same-format DB timestamps, string max ok.
         latest = {}
         for r in all_rows:
@@ -185,11 +215,11 @@ def _mark_disappeared_conditions_oos(site, run_started_at):
         for k, r in latest.items():
             if k in fresh or r["availability"] == "out_of_stock":
                 continue
-            supabase.table("prices").insert({
+            _exec(lambda r=r: supabase.table("prices").insert({
                 "phone_id": r["phone_id"], "price": r["price"],
                 "availability": "out_of_stock", "condition": r["condition"],
                 "url": r.get("url"),
-            }).execute()
+            }).execute())
             inserted += 1
     return inserted
 

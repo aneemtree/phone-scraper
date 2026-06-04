@@ -192,23 +192,37 @@ def _missing_keys():
     return todo
 
 
-def save_specs(key, model, device, specs, image_url, score, status):
+def save_specs(key, model, device, specs, image_url, score, status, image_source=None):
     from db import supabase, _exec, _note_op
     row = {
         "variant_key": key, "model": model,
         "gsm_id": device["id"] if device else None,
         "gsm_url": device_page_url(device) if device else None,
         "gsm_name": device["full"] if device else None,
-        "image_url": image_url, "specs": specs or None,
-        "match_score": score, "status": status,
+        "image_url": image_url, "image_source": image_source,
+        "specs": specs or None, "match_score": score, "status": status,
     }
     _exec(lambda: supabase.table("specs").upsert(row, on_conflict="variant_key").execute())
     _note_op(1)
 
 
+def set_image(variant_key, source_url):
+    """Admin: host an image (URL) as the canonical image for a variant_key and mark
+    its specs row image_source='admin'. Used to fill gaps GSMArena couldn't match.
+    The variant_key row must already exist (it will after an enrich run)."""
+    from db import supabase, _exec, host_image
+    hosted = host_image(source_url, f"admin/{variant_key}.jpg") or source_url
+    _exec(lambda: supabase.table("specs").upsert(
+        {"variant_key": variant_key, "image_url": hosted,
+         "image_source": "admin", "status": "ok"},
+        on_conflict="variant_key").execute())
+    print(f"set admin image for {variant_key}: {hosted}")
+    return hosted
+
+
 # -------------------------------------------------------------------------------- runs
 def enrich(limit=None):
-    from db import ensure_image
+    from db import host_image
     print("Loading GSMArena device DB...")
     devices = load_devices()
     print(f"  {len(devices)} devices loaded.")
@@ -227,8 +241,9 @@ def enrich(limit=None):
             print(f"  NOT FOUND  {model:32} [{key}]")
             continue
         specs, img, _ = fetch_device(device)
-        hosted = ensure_image(img, f"specs/{key}.jpg") if img else None
-        save_specs(key, model, device, specs, hosted or img, score, "ok")
+        hosted = host_image(img, f"specs/{key}.jpg") if img else None
+        save_specs(key, model, device, specs, hosted or img, score, "ok",
+                   image_source="gsmarena")
         matched += 1
         print(f"  ok({score})  {model:30} -> {device['full']:32} "
               f"({len(specs or {})} specs) [{key}]")
@@ -270,6 +285,10 @@ def dry_run(limit=None):
 
 
 if __name__ == "__main__":
+    if "--set-image" in sys.argv:
+        i = sys.argv.index("--set-image")
+        set_image(sys.argv[i + 1], sys.argv[i + 2])
+        sys.exit(0)
     lim = None
     if "--limit" in sys.argv:
         lim = int(sys.argv[sys.argv.index("--limit") + 1])

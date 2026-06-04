@@ -93,13 +93,18 @@ If two stores produce different variant_keys for the same physical phone
 Supabase to the same value. The offers view uses coalesce(canonical_key, variant_key).
 
 ### Image hosting (Cloudflare R2)
-Host images on Cloudflare R2 (zero egress — Supabase's cached egress was the quota
-we blew; DB/storage size are tiny). ensure_image() in db.py uploads to R2 on FIRST
-sighting only (path `{site}/{variant_key}.jpg`, head_object skip) and returns the
-R2 public URL. Config via env: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
-R2_BUCKET, R2_PUBLIC_BASE_URL (passed at job level in all workflows). If unset,
-ensure_image falls back to the store's source image URL, so local/unconfigured runs
-still work. The DB stays on Supabase. One-off backfill: migrate_images_to_r2.py.
+Images are now ONE canonical image per phone (variant_key), sourced from GSMArena
+(see gsmarena.py) and served by the offers view as `specs.image_url`. Stores are NO
+LONGER scraped for images. host_image() in db.py uploads to Cloudflare R2 (zero
+egress) on first sighting (head_object skip) and returns the public URL; it's used
+ONLY by GSMArena enrichment (path `specs/{variant_key}.jpg`) and admin uploads
+(`admin/{variant_key}.jpg`). ensure_image() is a DEPRECATED no-op kept at the
+scrapers' call sites (no download/upload) — phones.image_url is no longer used for
+display. Config via env: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
+R2_BUCKET, R2_PUBLIC_BASE_URL. Phones with no canonical image surface in the
+`missing_images` view for manual admin upload (gsmarena.set_image / `--set-image`).
+The DB stays on Supabase. (Legacy per-store R2 images under `{site}/…` are now
+orphaned and can be deleted to reclaim space.)
 
 ### GSMArena specs & canonical images (gsmarena.py)
 Enriches each phone CARD (keyed by variant_key = model+storage, NOT grade) with a
@@ -115,8 +120,10 @@ data[1]=[[maker_id, dev_id, model_name, keywords, image_file, short_name], …].
 fetch it ONCE and match every model LOCALLY; only matched devices' spec PAGES are
 fetched (one GET each, polite DELAY), parsed via stable `data-spec` attributes. The
 image is the page's bigpic URL (fallback: the quicksearch image_file), R2-hosted at
-`specs/{variant_key}.jpg` and used as the PRIMARY card image via the offers view
-(`coalesce(specs.image_url, phones.image_url)`).
+`specs/{variant_key}.jpg` (via host_image) and is THE card image via the offers view
+(`specs.image_url`; stores are no longer scraped for images). Gaps (not_found / no
+image) appear in the `missing_images` view for admin upload (set_image / `--set-image`,
+image_source='admin').
 
 Matching (auto, brand-aware, conservative): our model's tokens must be a SUBSET of
 the device's name+keyword tokens (keywords carry aliases so "Flip 6"↔"Flip6",
@@ -130,8 +137,9 @@ Schema: `specs_schema.sql` (idempotent; variant_key PK, specs jsonb, image_url,
 gsm_url/name/id, match_score, status, updated_at trigger). Workflow:
 `enrich-specs.yml` (weekly + dispatch). GSMArena may block Actions datacenter IPs
 (Cloudflare) — if a run comes back mostly not_found/errored, run gsmarena.py locally.
-After creating the specs table, wire the offers view to coalesce specs.image_url
-over phones.image_url and join on coalesce(canonical_key, variant_key).
+specs_schema.sql also (re)creates the offers view (image_url = specs.image_url) and
+the missing_images admin view. Order on first rollout: create specs table → run
+gsmarena.py to populate → then apply the offers view (so cards aren't blank).
 
 ### Store metadata
 After adding a new store, add a row to the stores table:

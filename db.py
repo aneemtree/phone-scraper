@@ -263,9 +263,21 @@ def r2_public_url(dest_path):
 
 
 def ensure_image(source_url, dest_path):
+    """DEPRECATED no-op kept for the scrapers' call sites.
+
+    The canonical phone image now comes from GSMArena (specs.image_url, hosted via
+    host_image at specs/{variant_key}.jpg) and is served by the offers view; stores
+    are no longer scraped for images, so this neither downloads nor uploads anything.
+    Returns the source URL unchanged (phones.image_url is no longer used for display).
+    """
+    return source_url
+
+
+def host_image(source_url, dest_path):
     """Host source_url on Cloudflare R2 at dest_path (first sighting only) and
     return its public URL. If R2 isn't configured, return the source URL so runs
-    still work without creds. Returns None only when there's nothing usable."""
+    still work without creds. Returns None only when there's nothing usable.
+    Used by the GSMArena enrichment and admin image uploads (NOT the scrapers)."""
     if not source_url:
         return None
     client = _r2()

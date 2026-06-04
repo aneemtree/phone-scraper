@@ -114,12 +114,18 @@ def grade_for(handle):
     i = html.find("option_main_container_condition")
     if i < 0:
         return None
-    blk = html[i:i + 1400]
-    m = re.search(r'active_value"\s+data_val="([^"]+)"', blk)
-    if not m:
-        return None
-    val = m.group(1).strip().lower()
-    return GRADE_MAP.get(val, val.title())
+    # Bound the search to the condition container only — the next option container
+    # (storage/color) starts at the following "option_main_container", so without
+    # this bound a unit whose condition has no active swatch would bleed into the
+    # storage block and mis-read e.g. "256gb" as the grade.
+    j = html.find("option_main_container", i + len("option_main_container_condition"))
+    blk = html[i:j] if j > i else html[i:i + 1400]
+    # Only accept a recognized grade data_val; anything else → None (→ "Pre-owned").
+    for m in re.finditer(r'active_value"\s+data_val="([^"]+)"', blk):
+        g = GRADE_MAP.get(m.group(1).strip().lower())
+        if g:
+            return g
+    return None
 
 
 def fetch_grades(products):

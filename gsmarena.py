@@ -44,7 +44,11 @@ _session.headers.update(HEADERS)
 
 # Tokens that don't help identify a model (connectivity/marketing/packaging noise).
 _STOP = set("5g 4g 3g 2g lte volte nfc android smartphone phone with dual sim "
-            "esim e-sim physical new".split())
+            "esim e-sim physical new moto".split())
+# "moto" is dropped: clean_model adds the Motorola sub-brand ("Motorola Moto Razr
+# 50 Ultra"), but GSMArena lists Razr without it ("Motorola Razr 50 Ultra"); the
+# redundant token otherwise breaks the subset match. Moto G/E still match (their
+# "moto" becomes a tolerated extra device token).
 
 
 def _get(url, tries=4):

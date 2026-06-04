@@ -76,6 +76,9 @@ jobs:
       - name: CellBuddy (incl OOS)
         if: ${{ !cancelled() }}
         run: python cellbuddy.py
+      - name: Budli (incl OOS)
+        if: ${{ !cancelled() }}
+        run: python budli.py
 
       - name: Normalize (clean names + recompute keys)
         if: ${{ !cancelled() }}

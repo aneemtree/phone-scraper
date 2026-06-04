@@ -24,6 +24,7 @@ on:
           - tetro
           - grest
           - cellbuddy
+          - budli
 
 permissions:
   contents: read

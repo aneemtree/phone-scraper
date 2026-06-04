@@ -22,6 +22,20 @@ COLORS = [
     "natural", "natural titanium", "blue titanium", "white titanium",
     "black titanium", "desert titanium", "aurora", "phantom violet",
     "mystic", "celestial", "celatial",
+    # Pixel / misc marketing colors that were leaking into model names.
+    "porcelain", "obsidian", "hazel", "peony", "aloe", "lemongrass",
+    "charcoal", "rose", "snow", "bay", "sage", "lime",
+    # Budli leaks — colour qualifiers left over after the base colour is stripped
+    # (e.g. "Solar Red" -> "Red" removed -> "Solar"; "Awesome Graphit(e)" ->
+    # "Awesome"). Multi-word forms kept first so the bare risky words (bold/legion,
+    # which are also non-phone brands elsewhere) are only ever removed as a colour
+    # phrase, never on their own.
+    "awesome graphite", "awesome graphit", "awesome navy", "awesome lilac",
+    "awesome iceblue", "awesome violet", "emerald brown", "sunset orange",
+    "legion sky", "bold hold", "navy", "solar", "sierra", "forest", "mist",
+    "ash", "chromatic", "meteorite", "cloud", "fluid", "prism", "oxygen",
+    "dash", "sunshine", "sunset", "orange", "emerald", "brown", "pearl",
+    "peari", "lilac", "iceblue", "graphite", "graphit", "awesome", "mostly",
 ]
 
 
@@ -270,6 +284,7 @@ def clean_model(title: str) -> str:
     """Strip storage, color, and refurb noise to get a clean model name."""
     t = title
     t = re.sub(r"\(.*?\)", " ", t)                      # remove (...) groups
+    t = re.sub(r"\s*/\s*", " ", t)                       # "128GB/256GB" -> tokens
     # "+" is a model suffix (Realme 12+, Galaxy S21+) — turn it into the word
     # "Plus" so it survives make_variant_key (which strips non-alphanumerics) and
     # stays distinct from the non-plus model. The (?!\d) guard avoids touching
@@ -290,7 +305,7 @@ def clean_model(title: str) -> str:
     for c in COLORS:                                     # colors (longest first)
         t = re.sub(rf"\b{re.escape(c)}\b", " ", t, flags=re.I)
     t = re.sub(r"\s*,\s*", " ", t)                       # drop orphaned commas
-    t = re.sub(r"\b(refurbished|renewed|pre-?owned|open\s*box|certified|certified refurbished)\b", " ", t, flags=re.I)
+    t = re.sub(r"\b(refurbished|renewed|pre-?owned|pre-?loved|used|open\s*box|certified|certified refurbished)\b", " ", t, flags=re.I)
     t = re.sub(r"^buy\s+", "", t, flags=re.I)  # strip leading "Buy " prefix
 
     # Normalize iPhone/iPad casing EARLY so later passes (model-number stripping,
@@ -337,6 +352,9 @@ def clean_model(title: str) -> str:
     # / "Mi Redmi Note 10"). Redmi is its own line — drop the stray "Mi" so it
     # collapses to "Xiaomi Redmi ..." and matches the other stores' key.
     t = re.sub(r"\bMi\s+(?=Redmi\b)", "", t, flags=re.I)
+    # "Vivo iQOO …" — iQOO is a standalone brand chip (other stores list it bare),
+    # so drop the redundant leading "Vivo" parent to share one key.
+    t = re.sub(r"\bVivo\s+(?=iQOO\b)", "", t, flags=re.I)
     t = re.sub(r"\bunbox(?:ed)?\b", " ", t, flags=re.I)  # strip unboxed/unbox
     t = re.sub(r"[/\\|]+$", "", t).strip()  # strip trailing slashes/pipes
     t = re.sub(r"\b(controlz|cashify|refit|xtracover|croma)\b", " ", t, flags=re.I)

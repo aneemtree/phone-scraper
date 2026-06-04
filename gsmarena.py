@@ -26,25 +26,29 @@ Run:  python3 gsmarena.py            # enrich all variant_keys missing specs
       python3 gsmarena.py --dry       # print proposed matches (+sample specs), NO writes
       python3 gsmarena.py --limit N   # cap how many keys to process (testing)
 """
+import gzip
 import json
 import os
 import random
 import re
+import ssl
 import sys
 import tempfile
 import time
-import requests
+import urllib.error
+import urllib.request
 
 GSM_BASE = "https://www.gsmarena.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 HEADERS = {"User-Agent": UA, "Accept": "text/html,application/json,*/*",
-           "Accept-Language": "en-US,en;q=0.9"}
+           "Accept-Language": "en-US,en;q=0.9", "Accept-Encoding": "gzip"}
 DELAY = float(os.environ.get("GSM_DELAY") or (8.0 if "--slow" in sys.argv else 2.5))
 MATCH_MAX_EXTRA = 2
 
-_session = requests.Session()
-_session.headers.update(HEADERS)
+_CTX = ssl.create_default_context()
+_CTX.check_hostname = False
+_CTX.verify_mode = ssl.CERT_NONE
 
 # Tokens that don't help identify a model (connectivity/marketing/packaging noise).
 _STOP = set("5g 4g 3g 2g lte volte nfc android smartphone phone with dual sim "
@@ -55,23 +59,40 @@ _STOP = set("5g 4g 3g 2g lte volte nfc android smartphone phone with dual sim "
 # "moto" becomes a tolerated extra device token).
 
 
+class _Resp:
+    def __init__(self, status_code, text, headers):
+        self.status_code = status_code
+        self.text = text
+        self.headers = headers
+
+    def json(self):
+        return json.loads(self.text)
+
+
 def _get(url, tries=4):
     delay = 30.0
-    r = None
     for _ in range(tries):
-        r = _session.get(url, timeout=45)
-        if r.status_code == 200:
-            return r
-        if r.status_code == 429 or r.status_code >= 500:
-            wait = delay
-            ra = r.headers.get("Retry-After")
-            if ra and ra.isdigit():
-                wait = max(wait, float(ra))
-            time.sleep(min(wait, 300) + random.uniform(0, 3))
+        try:
+            req = urllib.request.Request(url, headers=HEADERS)
+            resp = urllib.request.urlopen(req, timeout=45, context=_CTX)
+            raw = resp.read()
+            if resp.headers.get("Content-Encoding") == "gzip":
+                raw = gzip.decompress(raw)
+            return _Resp(200, raw.decode("utf-8", "replace"), resp.headers)
+        except urllib.error.HTTPError as e:
+            if e.code == 429 or e.code >= 500:
+                wait = delay
+                ra = e.headers.get("Retry-After")
+                if ra and ra.isdigit():
+                    wait = max(wait, float(ra))
+                time.sleep(min(wait, 300) + random.uniform(0, 3))
+                delay = min(delay * 2, 300)
+                continue
+            return _Resp(e.code, "", e.headers)
+        except Exception:
+            time.sleep(delay + random.uniform(0, 3))
             delay = min(delay * 2, 300)
-            continue
-        return r
-    return r
+    return _Resp(0, "", {})
 
 
 # ----------------------------------------------------------------------------- match

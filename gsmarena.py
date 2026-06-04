@@ -171,8 +171,14 @@ def _missing_keys():
     key = coalesce(canonical_key, variant_key) to honour the manual-merge fallback."""
     from db import supabase
     phones = supabase.table("phones").select("variant_key,canonical_key,model").execute().data or []
-    have = {row["variant_key"] for row in
-            (supabase.table("specs").select("variant_key").execute().data or [])}
+    try:
+        have = {row["variant_key"] for row in
+                (supabase.table("specs").select("variant_key").execute().data or [])}
+    except Exception as e:
+        # specs table not created yet (or wrong schema) — treat nothing as done so
+        # --dry can still report match quality. The real run needs specs_schema.sql.
+        print(f"  (specs table not ready: {e}; assuming none enriched)")
+        have = set()
     todo = {}
     for p in phones:
         key = p.get("canonical_key") or p.get("variant_key")

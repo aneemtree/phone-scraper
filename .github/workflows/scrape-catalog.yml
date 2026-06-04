@@ -79,6 +79,9 @@ jobs:
       - name: Budli (incl OOS)
         if: ${{ !cancelled() }}
         run: python budli.py
+      - name: iTradeit (incl OOS)
+        if: ${{ !cancelled() }}
+        run: python itradeit.py
 
       - name: Normalize (clean names + recompute keys)
         if: ${{ !cancelled() }}

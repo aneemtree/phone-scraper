@@ -85,6 +85,9 @@ jobs:
       - name: Gadget Rebirth (incl OOS)
         if: ${{ !cancelled() }}
         run: python gadgetrebirth.py
+      - name: Maple Store (incl OOS)
+        if: ${{ !cancelled() }}
+        run: python maplestore.py
 
       - name: Normalize (clean names + recompute keys)
         if: ${{ !cancelled() }}

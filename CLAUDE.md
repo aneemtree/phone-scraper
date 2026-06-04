@@ -109,7 +109,7 @@ Upload the store logo to Supabase Storage "logos" bucket and update logo_url.
 ### Scrapers & pipeline
 Active scrapers: cashify, controlz, refit, xtracover, ovantica, mobilegoo,
 sahivalue, oldsold, thephonehub, easyphones, tetro, grest, cellbuddy, budli,
-itradeit, gadgetrebirth. ControlZ filters non-phones by the actual
+itradeit, gadgetrebirth, maplestore. ControlZ filters non-phones by the actual
 product TITLE via is_phone() (a slug-only check missed accessories like power
 banks); thephonehub filters on the CLEAN model, not the slug, because its slugs
 embed marketing words (e.g. "50mp-ois-camera") that collide with is_phone().
@@ -198,6 +198,25 @@ Per-site data source / speed:
     "ike-new" typo). Image: product main image. Deep-link: /product/<sku>/ (the SPA
     has no per-variant URL param). `python3 gadgetrebirth.py --dry` fetches+prints
     offers with NO DB for validation. OOS-capable (INCLUDE_OOS).
+  - maplestore: Shopify (maplestore.in), iPhone-only, pre-owned, requests-only.
+    Uses a CUSTOM variant-group app, NOT Shopify variants: every products.json
+    entry is ONE physical unit (variant.sku = device serial), all "Default Title".
+    Model/storage/colour are baked into the product TITLE ("iPhone 16 Pro Max -
+    256GB - Desert Titanium - IW (28-Jun-26) - Pre-owned") but the per-unit GRADE
+    is NOT in the title/tags — it's the active condition swatch in the product PAGE
+    HTML (div.option_main_container_condition → the .active_value's data_val). So
+    list from /collections/all-iphones/products.json, then fetch each product page
+    (ThreadPoolExecutor, WORKERS=4 + 429 backoff — the site rate-limits) to read
+    the grade. Page grades Almost New/Superb/Good/Fair (data_val "fiar" is the
+    store's typo for Fair); "Almost New" is mapped to "Like New" (shared
+    cross-store label), Superb/Good/Fair share the Cashify vocab. Title separators are
+    inconsistent (" - " vs tight "Pro Max-256GB-…"), so model+storage are anchored
+    on the storage token (\d+GB/TB, in every title): storage = that token, model =
+    everything before it (clean_model strips the trailing dash + Dual/E-Sim/colour/
+    IW noise). One row per (variant_key, grade) at the LOWEST price across the
+    colour/warranty units. Price rupees; availability = variant.available;
+    deep-link ?variant=<id>. `python3 maplestore.py --dry` validates with NO DB.
+    OOS-capable (INCLUDE_OOS).
 
 ### Condition vocabulary
 Grades from graded stores are Fair/Good/Superb (Cashify/Grest/ThePhoneHub) and
@@ -209,7 +228,8 @@ budli adds "Unboxed - Brand Warranty" (store-specific) and uses Good for "Good C
 itradeit adds "Open Box" (its open-box-phones category; its certified-refurbished
 category folds to "Unknown Condition"). gadgetrebirth adds "Like New" (shares
 Tetro's label), "Excellent", and "New" (store-specific grades); its "Good"/"Fair"
-share the Cashify vocab.
+share the Cashify vocab. maplestore maps its page grade "Almost New" to "Like New"
+(shared with gadgetrebirth/Tetro) and uses Superb/Good/Fair from the Cashify vocab.
   - thephonehub: WooCommerce, requests-only. Listing + metadata from the public
     Store API (/wp-json/wc/store/v1/products?category=160). Per-variant
     price/stock/grade from the product page's embedded `data-product_variations`
@@ -234,14 +254,14 @@ Workflows (GitHub Actions):
     It does NOT run on push/merge. Runs all scrapers, then normalize_db.py.
   - scrape-one.yml — manual single-site chooser (workflow_dispatch) for testing
     one scraper. Does NOT run normalize_db.
-  - scrape-catalog.yml — MONTHLY (1st, 01:00 UTC) + dispatch. Runs the 14 JSON/RSC
+  - scrape-catalog.yml — MONTHLY (1st, 01:00 UTC) + dispatch. Runs the 15 JSON/RSC
     scrapers with INCLUDE_OOS=1 then normalize_db, purely for SEO.
 GitHub Actions cron is best-effort and often delayed (can be 1–3h late).
 
 ### Out-of-stock catalog (SEO, monthly)
-When the `INCLUDE_OOS=1` env var is set (only scrape-catalog.yml sets it), the 14
+When the `INCLUDE_OOS=1` env var is set (only scrape-catalog.yml sets it), the 15
 JSON/RSC scrapers (cashify, ovantica, refit, oldsold, mobilegoo, sahivalue,
-thephonehub, easyphones, tetro, grest, cellbuddy, budli, itradeit, gadgetrebirth) ALSO save out-of-stock variants: `phones.in_stock=false` + an `out_of_stock` price
+thephonehub, easyphones, tetro, grest, cellbuddy, budli, itradeit, gadgetrebirth, maplestore) ALSO save out-of-stock variants: `phones.in_stock=false` + an `out_of_stock` price
 snapshot at the LOWEST selling price (not the strike price), so model pages exist
 for SEO even when nothing is buyable. Default runs are available-only (flag off).
 Shared helpers in db.py: `INCLUDE_OOS` and `better_offer(availability, price, cur)`

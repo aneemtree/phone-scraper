@@ -27,6 +27,7 @@ on:
           - budli
           - itradeit
           - gadgetrebirth
+          - maplestore
 
 permissions:
   contents: read

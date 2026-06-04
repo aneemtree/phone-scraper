@@ -36,7 +36,7 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 HEADERS = {"User-Agent": UA, "Accept": "text/html,application/json,*/*",
            "Accept-Language": "en-US,en;q=0.9"}
-DELAY = 1.5          # polite gap between spec-page fetches
+DELAY = 2.5          # polite gap between spec-page fetches (GSMArena throttles bursts)
 MATCH_MAX_EXTRA = 2  # reject a match if the device name has >this many extra tokens
 
 _session = requests.Session()
@@ -157,16 +157,17 @@ def page_image(html):
 
 
 def fetch_device(d):
-    """Fetch the device page → (specs_dict, image_url). image falls back to the
-    quicksearch image filename if the page yields none."""
+    """Fetch the device page → (specs_dict, image_url, url, ok). ok is False when
+    the page is missing or a throttle/challenge page (HTTP 200 but no data-spec) —
+    so the caller can back off and NOT persist an empty sheet as 'ok'. The image
+    falls back to the quicksearch image filename."""
     url = device_page_url(d)
     r = _get(url)
-    if not r or r.status_code != 200:
-        return None, None, url
+    img = (f"https://fdn2.gsmarena.com/vv/bigpic/{d['image']}" if d["image"] else None)
+    if not r or r.status_code != 200 or "data-spec" not in r.text:
+        return None, img, url, False        # blocked / challenge / missing
     specs = parse_specs(r.text)
-    img = page_image(r.text) or (f"https://fdn2.gsmarena.com/vv/bigpic/{d['image']}"
-                                 if d["image"] else None)
-    return specs, img, url
+    return specs, (page_image(r.text) or img), url, bool(specs)
 
 
 # ------------------------------------------------------------------------------ DB I/O
@@ -176,8 +177,13 @@ def _missing_keys():
     from db import supabase
     phones = supabase.table("phones").select("variant_key,canonical_key,model").execute().data or []
     try:
-        have = {row["variant_key"] for row in
-                (supabase.table("specs").select("variant_key").execute().data or [])}
+        rows = supabase.table("specs").select("variant_key,status,specs").execute().data or []
+        # A key is "done" only if it's a recorded not_found OR an ok row that
+        # actually has specs. Earlier runs that saved empty 'ok' rows (GSMArena
+        # throttle) are re-processed.
+        have = {r["variant_key"] for r in rows
+                if r.get("status") == "not_found" or
+                (r.get("status") == "ok" and r.get("specs"))}
     except Exception as e:
         # specs table not created yet (or wrong schema) — treat nothing as done so
         # --dry can still report match quality. The real run needs specs_schema.sql.
@@ -232,7 +238,8 @@ def enrich(limit=None):
         keys = keys[:limit]
     print(f"{len(keys)} variant_keys missing specs.\n")
 
-    matched = notfound = 0
+    matched = notfound = blocked = 0
+    fails = 0
     for key, model in keys:
         device, score = best_match(model, devices)
         if not device:
@@ -240,7 +247,22 @@ def enrich(limit=None):
             notfound += 1
             print(f"  NOT FOUND  {model:32} [{key}]")
             continue
-        specs, img, _ = fetch_device(device)
+        specs, img, _, ok = fetch_device(device)
+        if not ok:
+            # Throttle/challenge page (HTTP 200 but no data-spec). Do NOT persist an
+            # empty sheet as 'ok' (it would never be re-fetched) — leave the key
+            # unenriched so a later run retries; back off, and bail if GSMArena keeps
+            # blocking (continuing just burns the cooldown).
+            fails += 1
+            blocked += 1
+            print(f"  BLOCKED    {model:30} -> {device['full']} (no specs; retries next run)")
+            if fails >= 5:
+                print("\nGSMArena is throttling (5 blocked in a row). Stopping — "
+                      "re-run later to resume from where it left off.")
+                break
+            time.sleep(30)
+            continue
+        fails = 0
         hosted = host_image(img, f"specs/{key}.jpg") if img else None
         save_specs(key, model, device, specs, hosted or img, score, "ok",
                    image_source="gsmarena")
@@ -249,7 +271,7 @@ def enrich(limit=None):
               f"({len(specs or {})} specs) [{key}]")
         time.sleep(DELAY)
 
-    print(f"\nDone. matched={matched} not_found={notfound}")
+    print(f"\nDone. matched={matched} not_found={notfound} blocked={blocked}")
 
 
 def dry_run(limit=None):
@@ -272,7 +294,7 @@ def dry_run(limit=None):
         matched += 1
         print(f"  {score:<5} {model:30} -> {device['full']}")
         if sample_done < 3:                  # show a real spec fetch for a few
-            specs, img, url = fetch_device(device)
+            specs, img, url, ok = fetch_device(device)
             print(f"        img: {img}")
             for k in ("displaysize", "chipset", "battery", "batdescription1",
                       "os", "internalmemory"):

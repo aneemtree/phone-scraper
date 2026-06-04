@@ -26,8 +26,11 @@ Run:  python3 gsmarena.py            # enrich all variant_keys missing specs
       python3 gsmarena.py --dry       # print proposed matches (+sample specs), NO writes
       python3 gsmarena.py --limit N   # cap how many keys to process (testing)
 """
+import json
+import os
 import re
 import sys
+import tempfile
 import time
 import requests
 
@@ -108,28 +111,53 @@ def best_match(model, devices):
 
 
 # ------------------------------------------------------------------------- quicksearch
-def load_devices():
-    """Fetch GSMArena's full device DB (one static JSON) → list of device dicts."""
-    home = _get(GSM_BASE + "/").text
-    m = re.search(r"/quicksearch-(\d+)\.jpg", home)
-    if not m:
-        raise RuntimeError("could not find quicksearch URL on GSMArena homepage")
-    data = _get(GSM_BASE + m.group(0)).json()
+# The device DB rarely changes, and homepage/quicksearch are the most throttle-prone
+# calls — so cache the parsed list locally and reuse it for a week. A manually saved
+# quicksearch JSON can be supplied via GSM_DEVICES_FILE to bypass the network.
+_CACHE = os.environ.get("GSM_DEVICES_FILE") or os.path.join(
+    tempfile.gettempdir(), "gsmarena_devices.json")
+_CACHE_TTL = 7 * 86400
+
+
+def _parse_quicksearch(data):
     makers, rows = data[0], data[1]
-    devices = []
+    out = []
     for e in rows:
         maker_id, dev_id, model_name, keywords, image, short = (list(e) + [None] * 6)[:6]
         maker = makers.get(str(maker_id), "")
-        devices.append({
-            "id": dev_id,
-            "maker": maker,
-            "model_name": model_name or "",
-            "keywords": keywords or "",
-            "image": image or "",
-            "short": short or "",
+        out.append({
+            "id": dev_id, "maker": maker, "model_name": model_name or "",
+            "keywords": keywords or "", "image": image or "", "short": short or "",
             "full": f"{maker} {model_name}".strip(),
         })
-    return devices
+    return out
+
+
+def load_devices():
+    """GSMArena's full device DB (one static JSON) → list of device dicts. Cached
+    locally for a week; falls back to a stale cache if GSMArena is throttling."""
+    if os.path.exists(_CACHE) and time.time() - os.path.getmtime(_CACHE) < _CACHE_TTL:
+        with open(_CACHE) as f:
+            return _parse_quicksearch(json.load(f))
+    try:
+        home = _get(GSM_BASE + "/").text
+        m = re.search(r"/quicksearch-(\d+)\.jpg", home)
+        if not m:
+            raise RuntimeError("no quicksearch link on homepage (likely a Cloudflare "
+                               "challenge — GSMArena is throttling this IP)")
+        data = _get(GSM_BASE + m.group(0)).json()
+        with open(_CACHE, "w") as f:
+            json.dump(data, f)
+        return _parse_quicksearch(data)
+    except Exception as e:
+        if os.path.exists(_CACHE):       # better stale than nothing
+            print(f"  device-DB fetch failed ({e}); using cached copy at {_CACHE}")
+            with open(_CACHE) as f:
+                return _parse_quicksearch(json.load(f))
+        raise RuntimeError(
+            f"{e}\nCould not load the GSMArena device DB and no cache exists. "
+            f"GSMArena is likely throttling this IP — wait ~15 min and retry, or save "
+            f"the quicksearch JSON from a browser and point GSM_DEVICES_FILE at it.")
 
 
 def device_page_url(d):

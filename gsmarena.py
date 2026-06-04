@@ -28,6 +28,7 @@ Run:  python3 gsmarena.py            # enrich all variant_keys missing specs
 """
 import json
 import os
+import random
 import re
 import sys
 import tempfile
@@ -39,8 +40,8 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 HEADERS = {"User-Agent": UA, "Accept": "text/html,application/json,*/*",
            "Accept-Language": "en-US,en;q=0.9"}
-DELAY = 2.5          # polite gap between spec-page fetches (GSMArena throttles bursts)
-MATCH_MAX_EXTRA = 2  # reject a match if the device name has >this many extra tokens
+DELAY = float(os.environ.get("GSM_DELAY") or (8.0 if "--slow" in sys.argv else 2.5))
+MATCH_MAX_EXTRA = 2
 
 _session = requests.Session()
 _session.headers.update(HEADERS)
@@ -55,15 +56,19 @@ _STOP = set("5g 4g 3g 2g lte volte nfc android smartphone phone with dual sim "
 
 
 def _get(url, tries=4):
-    delay = 1.0
+    delay = 30.0
     r = None
     for _ in range(tries):
         r = _session.get(url, timeout=45)
         if r.status_code == 200:
             return r
         if r.status_code == 429 or r.status_code >= 500:
-            time.sleep(delay)
-            delay = min(delay * 2, 16)
+            wait = delay
+            ra = r.headers.get("Retry-After")
+            if ra and ra.isdigit():
+                wait = max(wait, float(ra))
+            time.sleep(min(wait, 300) + random.uniform(0, 3))
+            delay = min(delay * 2, 300)
             continue
         return r
     return r
@@ -297,7 +302,7 @@ def enrich(limit=None):
         matched += 1
         print(f"  ok({score})  {model:30} -> {device['full']:32} "
               f"({len(specs or {})} specs) [{key}]")
-        time.sleep(DELAY)
+        time.sleep(DELAY + random.uniform(0, DELAY))
 
     print(f"\nDone. matched={matched} not_found={notfound} blocked={blocked}")
 

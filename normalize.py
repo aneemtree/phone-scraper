@@ -355,6 +355,14 @@ def clean_model(title: str) -> str:
     # "Vivo iQOO …" — iQOO is a standalone brand chip (other stores list it bare),
     # so drop the redundant leading "Vivo" parent to share one key.
     t = re.sub(r"\bVivo\s+(?=iQOO\b)", "", t, flags=re.I)
+    # Samsung's Galaxy lines are sometimes listed WITHOUT the "Galaxy" word
+    # (itradeit: "Samsung S25 Ultra", "Samsung Note 20"). Insert it so the key
+    # matches the stores that include it ("Samsung Galaxy S25 Ultra"). Only when
+    # "Galaxy" is absent AND the next token is a Galaxy-series marker (S/A/M/F/J +
+    # digit, or Note/Z/Fold/Flip/Tab) so non-Galaxy Samsung products are untouched.
+    if re.search(r"\bSamsung\b", t, re.I) and not re.search(r"\bGalaxy\b", t, re.I):
+        t = re.sub(r"\bSamsung\s+(?=(?:[SAMFJ]\d)|(?:Note|Z|Fold|Flip|Tab)\b)",
+                   "Samsung Galaxy ", t, count=1, flags=re.I)
     t = re.sub(r"\bunbox(?:ed)?\b", " ", t, flags=re.I)  # strip unboxed/unbox
     t = re.sub(r"[/\\|]+$", "", t).strip()  # strip trailing slashes/pipes
     t = re.sub(r"\b(controlz|cashify|refit|xtracover|croma)\b", " ", t, flags=re.I)

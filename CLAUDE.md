@@ -101,6 +101,38 @@ R2_BUCKET, R2_PUBLIC_BASE_URL (passed at job level in all workflows). If unset,
 ensure_image falls back to the store's source image URL, so local/unconfigured runs
 still work. The DB stays on Supabase. One-off backfill: migrate_images_to_r2.py.
 
+### GSMArena specs & canonical images (gsmarena.py)
+Enriches each phone CARD (keyed by variant_key = model+storage, NOT grade) with a
+spec sheet and a canonical product image from GSMArena. Runs INCREMENTALLY: only
+variant_keys present in `phones` but absent from `specs` are processed, and each key
+is fetched ONCE — a successful match OR a recorded `status='not_found'` is never
+re-fetched (so it self-limits; most runs are cheap). Key = coalesce(canonical_key,
+variant_key).
+
+No GSMArena API / search rate-limit problem: its autocomplete downloads the ENTIRE
+device DB as one static JSON (`/quicksearch-<n>.jpg`): data[0]={maker_id:name},
+data[1]=[[maker_id, dev_id, model_name, keywords, image_file, short_name], …]. We
+fetch it ONCE and match every model LOCALLY; only matched devices' spec PAGES are
+fetched (one GET each, polite DELAY), parsed via stable `data-spec` attributes. The
+image is the page's bigpic URL (fallback: the quicksearch image_file), R2-hosted at
+`specs/{variant_key}.jpg` and used as the PRIMARY card image via the offers view
+(`coalesce(specs.image_url, phones.image_url)`).
+
+Matching (auto, brand-aware, conservative): our model's tokens must be a SUBSET of
+the device's name+keyword tokens (keywords carry aliases so "Flip 6"↔"Flip6",
+"+"↔"Plus", "(2a)"↔"2a", "iPhone Air"↔"iPhone 17 Air" all resolve); among matches,
+the device with the FEWEST extra NAME tokens wins (so "iPhone 16" never grabs "16
+Pro"); reject if >MATCH_MAX_EXTRA extra tokens → `not_found` (never a wrong guess).
+`python3 gsmarena.py --dry [--limit N]` prints proposed matches + sample specs with
+NO writes (run it to eyeball match quality first).
+
+Schema: `specs_schema.sql` (idempotent; variant_key PK, specs jsonb, image_url,
+gsm_url/name/id, match_score, status, updated_at trigger). Workflow:
+`enrich-specs.yml` (weekly + dispatch). GSMArena may block Actions datacenter IPs
+(Cloudflare) — if a run comes back mostly not_found/errored, run gsmarena.py locally.
+After creating the specs table, wire the offers view to coalesce specs.image_url
+over phones.image_url and join on coalesce(canonical_key, variant_key).
+
 ### Store metadata
 After adding a new store, add a row to the stores table:
   insert into stores (site, display_name, website_url) values ('newsite', 'New Site', 'https://...');

@@ -355,6 +355,10 @@ def clean_model(title: str) -> str:
     # "Vivo iQOO …" — iQOO is a standalone brand chip (other stores list it bare),
     # so drop the redundant leading "Vivo" parent to share one key.
     t = re.sub(r"\bVivo\s+(?=iQOO\b)", "", t, flags=re.I)
+    # "Xiaomi POCO …" — POCO is its own chip (other stores list it bare). Some
+    # stores file POCO under the Xiaomi brand (e.g. gadgetrebirth), which prepends
+    # "Xiaomi"; drop it so "POCO F6 Pro" shares one key cross-store.
+    t = re.sub(r"\bXiaomi\s+(?=POCO\b)", "", t, flags=re.I)
     # Samsung's Galaxy lines are sometimes listed WITHOUT the "Galaxy" word
     # (itradeit: "Samsung S25 Ultra", "Samsung Note 20"). Insert it so the key
     # matches the stores that include it ("Samsung Galaxy S25 Ultra"). Only when

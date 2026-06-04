@@ -26,6 +26,7 @@ on:
           - cellbuddy
           - budli
           - itradeit
+          - gadgetrebirth
 
 permissions:
   contents: read

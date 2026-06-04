@@ -109,7 +109,7 @@ Upload the store logo to Supabase Storage "logos" bucket and update logo_url.
 ### Scrapers & pipeline
 Active scrapers: cashify, controlz, refit, xtracover, ovantica, mobilegoo,
 sahivalue, oldsold, thephonehub, easyphones, tetro, grest, cellbuddy, budli,
-itradeit. ControlZ filters non-phones by the actual
+itradeit, gadgetrebirth. ControlZ filters non-phones by the actual
 product TITLE via is_phone() (a slug-only check missed accessories like power
 banks); thephonehub filters on the CLEAN model, not the slug, because its slugs
 embed marketing words (e.g. "50mp-ois-camera") that collide with is_phone().
@@ -176,6 +176,28 @@ Per-site data source / speed:
     in normalize.py) so keys match the other stores. Prices: embedded display_price
     is rupees (display_regular_price is the strike, ignored); Store API prices.price
     is minor units (÷100). Deep-link via ?attribute_pa_storage/_color.
+  - gadgetrebirth: custom React storefront (gadgetrebirth.com), requests-only,
+    all-brands. The SPA is backed by its OWN JSON API at api.gadgetrebirth.com;
+    the catalog endpoint returns the FULL per-product variant matrix inline, so no
+    per-product fetch and no browser: GET /api/products?limit=100&skip=<n>.
+    Pagination is by `skip` ONLY (page/large-limit params are ignored; a single
+    response caps ~200 rows), so walk skip in steps of 100 until a short/empty page.
+    The endpoint returns ALL ~1100 products across every category (incl sold-out
+    historical) — keep category=="phones". Each product has variants[] with
+    options{Condition, Storage, Color}, integer rupee `price`, `compareAtPrice`
+    (strike, ignored), `stock`, `active`. One row per (condition, storage) at the
+    LOWEST color price. Availability = `active AND stock>0` (VALIDATED against the
+    rendered UI — the payload carries both phantom cases this guards: active=false
+    & stock>0, and active=true & stock=0, both correctly excluded; raw stock and
+    top-level `status` are NOT trusted alone). The API `name` carries no
+    storage/colour, so build_model() unwraps parenthesised model ids ("Phone (2)"
+    → "Nothing Phone 2", which clean_model would otherwise delete) and prepends the
+    brand slug only when absent (so "Galaxy S25 Ultra"/"Xperia 1 V" get their brand
+    chip without doubling "OnePlus"/"iPhone"). Conditions New/Like New/Excellent/
+    Good/Fair (norm_condition() maps + fixes the payload's casing noise and the
+    "ike-new" typo). Image: product main image. Deep-link: /product/<sku>/ (the SPA
+    has no per-variant URL param). `python3 gadgetrebirth.py --dry` fetches+prints
+    offers with NO DB for validation. OOS-capable (INCLUDE_OOS).
 
 ### Condition vocabulary
 Grades from graded stores are Fair/Good/Superb (Cashify/Grest/ThePhoneHub) and
@@ -185,7 +207,9 @@ normalize_condition(), since it's just the ungraded-stock placeholder and isn't
 comparable across stores. cellbuddy adds "No Face ID"/"No Touch ID" (store-specific);
 budli adds "Unboxed - Brand Warranty" (store-specific) and uses Good for "Good Condition";
 itradeit adds "Open Box" (its open-box-phones category; its certified-refurbished
-category folds to "Unknown Condition").
+category folds to "Unknown Condition"). gadgetrebirth adds "Like New" (shares
+Tetro's label), "Excellent", and "New" (store-specific grades); its "Good"/"Fair"
+share the Cashify vocab.
   - thephonehub: WooCommerce, requests-only. Listing + metadata from the public
     Store API (/wp-json/wc/store/v1/products?category=160). Per-variant
     price/stock/grade from the product page's embedded `data-product_variations`
@@ -210,14 +234,14 @@ Workflows (GitHub Actions):
     It does NOT run on push/merge. Runs all scrapers, then normalize_db.py.
   - scrape-one.yml — manual single-site chooser (workflow_dispatch) for testing
     one scraper. Does NOT run normalize_db.
-  - scrape-catalog.yml — MONTHLY (1st, 01:00 UTC) + dispatch. Runs the 13 JSON/RSC
+  - scrape-catalog.yml — MONTHLY (1st, 01:00 UTC) + dispatch. Runs the 14 JSON/RSC
     scrapers with INCLUDE_OOS=1 then normalize_db, purely for SEO.
 GitHub Actions cron is best-effort and often delayed (can be 1–3h late).
 
 ### Out-of-stock catalog (SEO, monthly)
-When the `INCLUDE_OOS=1` env var is set (only scrape-catalog.yml sets it), the 13
+When the `INCLUDE_OOS=1` env var is set (only scrape-catalog.yml sets it), the 14
 JSON/RSC scrapers (cashify, ovantica, refit, oldsold, mobilegoo, sahivalue,
-thephonehub, easyphones, tetro, grest, cellbuddy, budli, itradeit) ALSO save out-of-stock variants: `phones.in_stock=false` + an `out_of_stock` price
+thephonehub, easyphones, tetro, grest, cellbuddy, budli, itradeit, gadgetrebirth) ALSO save out-of-stock variants: `phones.in_stock=false` + an `out_of_stock` price
 snapshot at the LOWEST selling price (not the strike price), so model pages exist
 for SEO even when nothing is buyable. Default runs are available-only (flag off).
 Shared helpers in db.py: `INCLUDE_OOS` and `better_offer(availability, price, cur)`

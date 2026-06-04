@@ -82,6 +82,9 @@ jobs:
       - name: iTradeit (incl OOS)
         if: ${{ !cancelled() }}
         run: python itradeit.py
+      - name: Gadget Rebirth (incl OOS)
+        if: ${{ !cancelled() }}
+        run: python gadgetrebirth.py
 
       - name: Normalize (clean names + recompute keys)
         if: ${{ !cancelled() }}

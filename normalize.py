@@ -36,8 +36,13 @@ COLORS = [
     "ash", "chromatic", "meteorite", "cloud", "fluid", "prism", "oxygen",
     "dash", "sunshine", "sunset", "orange", "emerald", "brown", "pearl",
     "peari", "lilac", "iceblue", "graphite", "graphit", "awesome", "mostly",
-    "prism cube", "prism crush", "cube", "crush",
+    "prism cube", "prism crush", "cube", "crush", "lunar", "deepsea",
 ]
+
+# Roman numerals (II-XII) that title-casing would lower-case (e.g. Sony "Xperia 1
+# III" -> "Iii"); uppercased back in clean_model. Single "I" is excluded (too
+# ambiguous); "V"/"X" are included for Xperia "1 V"/iPhone "X".
+ROMAN_NUMERALS = {"ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi", "xii"}
 
 
 def normalize_storage(raw: str | None) -> str | None:
@@ -376,7 +381,11 @@ def clean_model(title: str) -> str:
     t = re.sub(r"\bunbox(?:ed)?\b", " ", t, flags=re.I)  # strip unboxed/unbox
     t = re.sub(r"[/\\|]+$", "", t).strip()  # strip trailing slashes/pipes
     t = re.sub(r"\b(controlz|cashify|refit|xtracover|croma)\b", " ", t, flags=re.I)
-    t = re.sub(r"\b(special series|saver series|aurora|titanium|esim|e-?sim|physical sim|dual sim|dual)\b", " ", t, flags=re.I)
+    t = re.sub(r"\b(special series|saver series|aurora|titanium|esim|e-?sim|physical sim|single sim|dual sim|dual)\b", " ", t, flags=re.I)
+    # Spacing: GSMArena and some stores write "Z Fold4"/"Reno15"/"Nord CE3" while
+    # others use a space; unify to the spaced form so the same phone shares one key.
+    t = re.sub(r"\b(fold|flip|reno)(\d)", r"\1 \2", t, flags=re.I)
+    t = re.sub(r"\bce(\d)", r"CE \1", t, flags=re.I)
     # Network/connectivity suffixes (5G, 4G, LTE, WiFi variants)
     t = re.sub(r"\b(5g|4g|lte|3g|wifi|wi-fi)\b", " ", t, flags=re.I)
     # Regional/market variants
@@ -429,6 +438,7 @@ def clean_model(title: str) -> str:
     # iPhone X-series suffixes: normalize "Xs"/"Xr" casing to "XS"/"XR".
     t = re.sub(r"\bxs\b", "XS", t, flags=re.I)
     t = re.sub(r"\bxr\b", "XR", t, flags=re.I)
+    t = " ".join(w.upper() if w.lower() in ROMAN_NUMERALS else w for w in t.split())
     return t
 
 

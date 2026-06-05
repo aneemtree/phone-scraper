@@ -1,24 +1,18 @@
 """
 Delete orphaned images from Cloudflare R2.
 
-The canonical image now lives under `img/` (Beebom) and `admin/` (manual uploads).
-Everything else in the bucket is stale: the old GSMArena renders under `specs/` and
-the legacy per-store images under `{site}/`. This removes them.
+Images now live under `img/` (Beebom primary), `specs/` (GSMArena fallback), and
+`admin/` (manual uploads) — all kept. Only the legacy per-store images under
+`{site}/` are stale; this removes those.
 
-SAFETY: dry-run by default (lists what would be deleted). Pass --delete to actually
-remove. Run this ONLY after the Beebom backfill is complete AND old GSMArena image
-URLs have been cleared from the specs table, e.g.:
-
-    update specs set image_url = null, image_source = null
-     where image_source is distinct from 'beebom'
-       and image_source is distinct from 'admin';
+SAFETY: dry-run by default (lists what would be deleted). Pass --delete to remove.
 
     python3 cleanup_r2_images.py            # dry run: show what would go
     python3 cleanup_r2_images.py --delete    # actually delete
 """
 import sys
 
-KEEP_PREFIXES = ("img/", "admin/")
+KEEP_PREFIXES = ("img/", "specs/", "admin/")
 
 
 def _iter_keys(client, bucket):

@@ -8,8 +8,9 @@ create table if not exists specs (
   gsm_id      bigint,
   gsm_url     text,
   gsm_name    text,
-  image_url    text,           -- canonical product image (R2-hosted), card primary
-  image_source text,           -- 'gsmarena' | 'admin' | null
+  image_url      text,         -- PRIMARY card image (Beebom / admin), R2-hosted
+  image_fallback text,         -- GSMArena image, used only when image_url is null
+  image_source   text,         -- 'beebom' | 'admin' | null (source of image_url)
   specs        jsonb,          -- full GSMArena data-spec sheet
   match_score  real,
   status       text not null default 'ok',  -- 'ok' | 'not_found'
@@ -22,8 +23,9 @@ alter table specs add column if not exists model       text;
 alter table specs add column if not exists gsm_id      bigint;
 alter table specs add column if not exists gsm_url     text;
 alter table specs add column if not exists gsm_name    text;
-alter table specs add column if not exists image_url    text;
-alter table specs add column if not exists image_source text;
+alter table specs add column if not exists image_url      text;
+alter table specs add column if not exists image_fallback text;
+alter table specs add column if not exists image_source   text;
 alter table specs add column if not exists specs        jsonb;
 alter table specs add column if not exists match_score real;
 alter table specs add column if not exists status      text not null default 'ok';
@@ -57,7 +59,7 @@ drop view if exists offers;
 create view offers as
  select coalesce(ph.canonical_key, ph.variant_key) as variant_key,
     ph.model, ph.storage, ph.ram, ph.site, ph.name, ph.url,
-    sp.image_url            as image_url,
+    coalesce(sp.image_url, sp.image_fallback) as image_url,   -- Beebom primary, GSMArena fallback
     lp.price, lp.availability, lp.condition, lp.rating, lp.review_count,
     lp.warranty_months, lp.url as condition_url,
     s.display_name as store_name, s.logo_url, s.default_warranty_months, s.trust_score,
@@ -68,10 +70,11 @@ create view offers as
      join latest_prices lp on lp.phone_id = ph.id
      left join stores s on s.site = ph.site
      left join lateral (
-       select image_url, specs, gsm_url
+       select image_url, image_fallback, specs, gsm_url
          from specs sx
         where lower(sx.model) = lower(ph.model)
-        order by (sx.specs is not null) desc, (sx.image_url is not null) desc,
+        order by (sx.specs is not null) desc,
+                 (coalesce(sx.image_url, sx.image_fallback) is not null) desc,
                  sx.updated_at desc
         limit 1
      ) sp on true
@@ -85,5 +88,6 @@ create view missing_images as
    from phones ph
   where ph.in_stock = true
     and not exists (select 1 from specs sx
-                     where lower(sx.model) = lower(ph.model) and sx.image_url is not null)
+                     where lower(sx.model) = lower(ph.model)
+                       and coalesce(sx.image_url, sx.image_fallback) is not null)
   group by ph.model;

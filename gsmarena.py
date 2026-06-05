@@ -292,13 +292,16 @@ def upsert_specs(model, fields):
     _note_op(1)
 
 
-def save_specs(key, model, device, specs, image_url, score, status, image_source=None):
-    upsert_specs(model, {
+def save_specs(key, model, device, image_fallback, specs, score, status):
+    fields = {
         "gsm_id": device["id"] if device else None,
         "gsm_url": device_page_url(device) if device else None,
         "gsm_name": device["full"] if device else None,
         "specs": specs or None, "match_score": score, "status": status,
-    })
+    }
+    if image_fallback:
+        fields["image_fallback"] = image_fallback   # GSMArena image (fallback only)
+    upsert_specs(model, fields)
 
 
 def set_image(model, source_url):
@@ -315,6 +318,8 @@ def set_image(model, source_url):
 
 # -------------------------------------------------------------------------------- runs
 def enrich(limit=None):
+    from db import host_image
+    from normalize import make_variant_key
     print("Loading GSMArena device DB...")
     devices = load_devices()
     print(f"  {len(devices)} devices loaded.")
@@ -343,7 +348,8 @@ def enrich(limit=None):
             time.sleep(30)
             continue
         fails = 0
-        save_specs(key, model, device, specs, None, score, "ok")
+        hosted = host_image(img, f"specs/{make_variant_key(model, None)}.jpg") if img else None
+        save_specs(key, model, device, hosted or img, specs, score, "ok")
         matched += 1
         print(f"  ok({score})  {model:30} -> {device['full']:32} "
               f"({len(specs or {})} specs) [{key}]")

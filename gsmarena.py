@@ -237,7 +237,7 @@ def _targets(images_only=False):
     try:
         rows = supabase.table("specs").select("model,status,specs,image_url").execute().data or []
         for r in rows:
-            m = r.get("model") or ""
+            m = (r.get("model") or "").lower()
             st = status.setdefault(m, {"specs": False, "image": False, "nf": False})
             if r.get("specs"):
                 st["specs"] = True
@@ -251,13 +251,13 @@ def _targets(images_only=False):
     for p in phones:
         model = p.get("model") or ""
         key = p.get("canonical_key") or p.get("variant_key")
-        if not model or not key or model in seen:
+        if not model or not key or model.lower() in seen:
             continue
-        st = status.get(model)
+        st = status.get(model.lower())
         done = (st and st["image"]) if images_only else (st and (st["specs"] or st["nf"]))
         if done:
             continue
-        seen.add(model)
+        seen.add(model.lower())
         todo.append((key, model))
     return todo
 

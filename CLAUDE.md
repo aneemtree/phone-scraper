@@ -110,7 +110,8 @@ orphaned and can be deleted to reclaim space.)
 ### GSMArena specs & canonical images (gsmarena.py)
 Enriches each phone MODEL with a spec sheet and a canonical product image from
 GSMArena. Specs/image are per-MODEL (display, chipset, camera, image are identical
-across storage), so the offers view joins specs on `phones.model` (a lateral that
+across storage), so the offers view joins specs on `phones.model` case-insensitively
+(lower(); a lateral that
 picks the best row per model) and EVERY storage variant of a phone shares one spec
 sheet/image. Enrichment dedupes by model: `_targets()` returns one (key, model) per
 distinct model still missing work, so a model is fetched ONCE (not once per storage)

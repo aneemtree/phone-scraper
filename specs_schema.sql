@@ -45,7 +45,7 @@ create trigger specs_set_updated_at
 
 -- Fast lookup of which keys still need enrichment.
 create index if not exists specs_status_idx on specs (status);
-create index if not exists specs_model_idx on specs (model);
+create index if not exists specs_model_lower_idx on specs (lower(model));
 
 -- ---------------------------------------------------------------------------
 -- offers view: specs and the canonical image are per-MODEL, so every storage
@@ -70,7 +70,7 @@ create view offers as
      left join lateral (
        select image_url, specs, gsm_url
          from specs sx
-        where sx.model = ph.model
+        where lower(sx.model) = lower(ph.model)
         order by (sx.specs is not null) desc, (sx.image_url is not null) desc,
                  sx.updated_at desc
         limit 1
@@ -85,5 +85,5 @@ create view missing_images as
    from phones ph
   where ph.in_stock = true
     and not exists (select 1 from specs sx
-                     where sx.model = ph.model and sx.image_url is not null)
+                     where lower(sx.model) = lower(ph.model) and sx.image_url is not null)
   group by ph.model;

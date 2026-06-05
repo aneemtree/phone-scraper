@@ -274,46 +274,53 @@ def _targets(images_only=False):
     return todo
 
 
-def save_specs(key, model, device, specs, image_url, score, status, image_source=None):
+def upsert_specs(model, fields):
+    """Merge fields into the per-MODEL specs row (one row per model, shared across
+    storage variants and across enrichers). Updates the existing row(s) for the
+    model if present, else inserts one keyed by the storage-less model slug. This
+    lets GSMArena (specs) and Beebom (image) write to the same row without
+    clobbering each other."""
     from db import supabase, _exec, _note_op
-    row = {
-        "variant_key": key, "model": model,
+    from normalize import make_variant_key
+    existing = _exec(lambda: supabase.table("specs").select("variant_key")
+                     .eq("model", model).limit(1).execute()).data
+    if existing:
+        _exec(lambda: supabase.table("specs").update(fields).eq("model", model).execute())
+    else:
+        row = {"variant_key": make_variant_key(model, None), "model": model, **fields}
+        _exec(lambda: supabase.table("specs").insert(row).execute())
+    _note_op(1)
+
+
+def save_specs(key, model, device, specs, image_url, score, status, image_source=None):
+    upsert_specs(model, {
         "gsm_id": device["id"] if device else None,
         "gsm_url": device_page_url(device) if device else None,
         "gsm_name": device["full"] if device else None,
-        "image_url": image_url, "image_source": image_source,
         "specs": specs or None, "match_score": score, "status": status,
-    }
-    _exec(lambda: supabase.table("specs").upsert(row, on_conflict="variant_key").execute())
-    _note_op(1)
+    })
 
 
 def set_image(model, source_url):
     """Admin: host an image as the canonical image for a MODEL (shared across all
-    its storage variants) and mark the specs row image_source='admin'. Fills gaps
-    GSMArena couldn't match. Pass the exact model name shown in missing_images."""
-    from db import supabase, _exec, host_image
+    its storage variants), merged into its specs row. Pass the exact model name
+    shown in missing_images."""
+    from db import host_image
     from normalize import make_variant_key
-    key = make_variant_key(model, None)
-    hosted = host_image(source_url, f"admin/{key}.jpg") or source_url
-    _exec(lambda: supabase.table("specs").upsert(
-        {"variant_key": key, "model": model, "image_url": hosted,
-         "image_source": "admin", "status": "ok"},
-        on_conflict="variant_key").execute())
+    hosted = host_image(source_url, f"admin/{make_variant_key(model, None)}.jpg") or source_url
+    upsert_specs(model, {"image_url": hosted, "image_source": "admin"})
     print(f"set admin image for {model}: {hosted}")
     return hosted
 
 
 # -------------------------------------------------------------------------------- runs
-def enrich(limit=None, images_only=False):
-    from db import host_image
+def enrich(limit=None):
     print("Loading GSMArena device DB...")
     devices = load_devices()
     print(f"  {len(devices)} devices loaded.")
-    todo = _targets(images_only=images_only)
+    todo = _targets()
     keys = todo[:limit] if limit else todo
-    mode = "images" if images_only else "specs"
-    print(f"{len(keys)} models missing {mode}.\n")
+    print(f"{len(keys)} models missing specs.\n")
 
     matched = notfound = blocked = 0
     fails = 0
@@ -323,15 +330,6 @@ def enrich(limit=None, images_only=False):
             save_specs(key, model, None, None, None, 0.0, "not_found")
             notfound += 1
             print(f"  NOT FOUND  {model:32} [{key}]")
-            continue
-        if images_only:
-            img = f"https://fdn2.gsmarena.com/vv/bigpic/{device['image']}" if device["image"] else None
-            hosted = host_image(img, f"specs/{key}.jpg") if img else None
-            save_specs(key, model, device, None, hosted or img, score, "ok",
-                       image_source="gsmarena")
-            matched += 1
-            print(f"  img({score})  {model:30} -> {device['full']:32} [{key}]")
-            time.sleep(1.0 + random.uniform(0, 1.0))
             continue
         specs, img, _, ok = fetch_device(device)
         if not ok:
@@ -345,9 +343,7 @@ def enrich(limit=None, images_only=False):
             time.sleep(30)
             continue
         fails = 0
-        hosted = host_image(img, f"specs/{key}.jpg") if img else None
-        save_specs(key, model, device, specs, hosted or img, score, "ok",
-                   image_source="gsmarena")
+        save_specs(key, model, device, specs, None, score, "ok")
         matched += 1
         print(f"  ok({score})  {model:30} -> {device['full']:32} "
               f"({len(specs or {})} specs) [{key}]")
@@ -400,7 +396,7 @@ if __name__ == "__main__":
         from obs import init_sentry, log_error
         init_sentry("gsmarena")
         try:
-            enrich(lim, images_only=("--images-only" in sys.argv))
+            enrich(lim)
         except Exception as e:
             log_error(e, site="gsmarena", phase="enrich")
             raise

@@ -93,14 +93,16 @@ If two stores produce different variant_keys for the same physical phone
 Supabase to the same value. The offers view uses coalesce(canonical_key, variant_key).
 
 ### Image hosting (Cloudflare R2)
-Images are now ONE canonical image per phone (variant_key), sourced from GSMArena
-(see gsmarena.py) and served by the offers view as `specs.image_url`. Stores are NO
-LONGER scraped for images. host_image() in db.py uploads to Cloudflare R2 (zero
-egress) on first sighting (head_object skip) and returns the public URL; it's used
-ONLY by GSMArena enrichment (path `specs/{variant_key}.jpg`) and admin uploads
-(`admin/{variant_key}.jpg`). ensure_image() is a DEPRECATED no-op kept at the
-scrapers' call sites (no download/upload) — phones.image_url is no longer used for
-display. Config via env: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
+Images are ONE canonical image per MODEL, sourced from Beebom (beebom.py;
+gadgets.beebom.com front-back render at ~640-1000px — GSMArena's was only 160px) and
+served by the offers view as `specs.image_url`. SPECS come from GSMArena
+(gsmarena.py, specs-only — it no longer writes image_url); both write to the same
+per-model specs row via upsert_specs(). Stores are NO LONGER scraped for images.
+host_image() in db.py uploads to Cloudflare R2 (zero egress) on first sighting
+(head_object skip) and returns the public URL; used by Beebom (path
+`img/{model_slug}.jpg`) and admin uploads (`admin/{model_slug}.jpg`). ensure_image()
+is a DEPRECATED no-op kept at the scrapers' call sites — phones.image_url is no
+longer used for display. Config via env: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
 R2_BUCKET, R2_PUBLIC_BASE_URL. Phones with no canonical image surface in the
 `missing_images` view (by MODEL) for manual admin upload
 (gsmarena.set_image / `python3 gsmarena.py --set-image "<model>" <url>`).

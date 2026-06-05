@@ -1,94 +1,129 @@
 """
 Beebom image enrichment (gadgets.beebom.com).
 
-Source of the PRIMARY card image (specs.image_url). Beebom hosts a clean
-front-back product render per phone at ~640-1000px (vs GSMArena's 160px), reachable
-by a predictable slug: gadgets.beebom.com/mobile/<slug>, og:image -> the render on
-cdn.beebom.com. Open access (no bot block), so requests-only by URL construction;
-no full-catalog crawl needed.
+Primary card image (specs.image_url): a clean front-back render per phone at
+~640-1000px, far larger than GSMArena's 160px. Specs stay on GSMArena; this only
+writes image_url + image_source='beebom'.
 
-Per MODEL (not variant_key), incremental: only models without a Beebom image are
-processed, each fetched once and shared across storage variants via the offers
-view's model join. Specs stay on GSMArena; this only writes image_url +
-image_source='beebom'. Misses (slug not found) keep no image and surface in
-missing_images for admin upload (gsmarena.set_image).
+Matching uses Beebom's OWN full catalog sitemap (all_mobiles.xml, ~2300 slugs),
+fetched once and cached. Each of our models is matched LOCALLY to a Beebom slug via
+a separator/5G-insensitive compact key (so 'OPPO Reno 11' -> 'oppo-reno11-5g',
+'OnePlus Nord CE 4' -> 'oneplus-nord-ce4-5g' all resolve); a few brand-token
+variants (apple/iphone, xiaomi/redmi, nothing/cmf, motorola/moto) cover Beebom's
+brand-prefix differences. Only the matched product page is fetched, for its
+og:image; a URL-pasted-as-filename / geni.us og:image is rejected (Beebom CMS junk).
+Unmatched models surface in missing_images for admin upload.
 
-Run:  python3 beebom.py            # fetch images for models missing one
-      python3 beebom.py --dry       # print matches/coverage, NO writes
-      python3 beebom.py --limit N
+Per MODEL, incremental, dedup. Run:
+  python3 beebom.py            # fetch images for models missing one
+  python3 beebom.py --dry       # model -> matched slug (or closest), NO writes
+  python3 beebom.py --limit N
 """
+import os
 import re
 import sys
 import time
 import random
+import tempfile
 
 from normalize import make_variant_key
-from gsmarena import _get, _fetch_all, upsert_specs, _toks
+from gsmarena import _get, _fetch_all, upsert_specs
 
-BASE = "https://gadgets.beebom.com/mobile/"
-DELAY = float(__import__("os").environ.get("BEEBOM_DELAY") or 1.0)
+SITEMAP = "https://gadgets.beebom.com/all_mobiles.xml"
+PROD = "https://gadgets.beebom.com/mobile/"
+DELAY = float(os.environ.get("BEEBOM_DELAY") or 1.0)
+_CACHE = os.environ.get("BEEBOM_SLUGS_FILE") or os.path.join(
+    tempfile.gettempdir(), "beebom_slugs.txt")
+_TTL = 7 * 86400
 
 
-def slug_candidates(model):
+def compact(s):
+    s = re.sub(r"[^a-z0-9]+", "", s.lower())
+    return re.sub(r"(5g|4g|3g)", "", s)
+
+
+def _index_keys(slug):
+    full = compact(slug)
+    noyear = re.sub(r"20[12][0-9]", "", full)
+    return [full, noyear]
+
+
+def slug_variants(model):
     base = make_variant_key(model, None)
-    cands = [base]
+    out = [base]
     def add(s):
-        if s and s not in cands:
-            cands.append(s)
+        if s and s not in out:
+            out.append(s)
     if base.startswith("apple-"):
         add(base[len("apple-"):])
     if re.match(r"^xiaomi-(redmi|poco|mi-)", base):
-        add(re.sub(r"^xiaomi-", "", base))
+        add(base[len("xiaomi-"):])
     if base.startswith("nothing-cmf"):
         add(base[len("nothing-"):])
-    if "-ce-" in base:
-        add(re.sub(r"-ce-(\d)", r"-ce\1", base))
-    if re.search(r"-(fold|flip)-\d", base):
-        add(re.sub(r"-(fold|flip)-(\d)", r"-\1\2", base))
     if base.startswith("motorola-moto-"):
         rest = base[len("motorola-moto-"):]
         add("motorola-" + rest)
         add("moto-" + rest)
     elif base.startswith("motorola-"):
         add("moto-" + base[len("motorola-"):])
-    for c in list(cands):                     # also try the 5G-suffixed form of each
-        add(c + "-5g")
-    return cands
+    return out
 
 
-def _page_is_model(model, html):
-    """Guard against slug collisions: the page title must contain the model's
-    non-brand tokens (so e.g. an 'oppo-reno-10' slug landing on a Honor page is
-    rejected). Does NOT catch a correct page with a wrong CMS image."""
-    m = (re.search(r'property=["\']og:title["\']\s+content=["\']([^"\']+)', html)
-         or re.search(r'<title[^>]*>([^<]+)', html))
-    if not m:
-        return False
-    title = set(_toks(m.group(1)))
-    ours = _toks(model)
-    rest = set(ours[1:]) if len(ours) > 1 else set(ours)
-    return rest <= title
+def load_index():
+    """compact-key -> beebom slug, from the catalog sitemap (cached a week)."""
+    slugs = None
+    if os.path.exists(_CACHE) and time.time() - os.path.getmtime(_CACHE) < _TTL:
+        slugs = open(_CACHE).read().split()
+    if not slugs:
+        r = _get(SITEMAP)
+        slugs = re.findall(r"/mobile/([a-z0-9\-]+)", r.text) if r and r.status_code == 200 else []
+        if slugs:
+            try:
+                open(_CACHE, "w").write("\n".join(slugs))
+            except Exception:
+                pass
+    idx = {}
+    for s in slugs:
+        for k in _index_keys(s):
+            if k and (k not in idx or len(s) < len(idx[k])):
+                idx[k] = s
+    return idx, slugs
 
 
-def fetch_image(model):
-    """Return (image_url, page_url) from Beebom, or (None, None)."""
-    for slug in slug_candidates(model):
-        url = BASE + slug
-        r = _get(url)
-        if not r or r.status_code != 200 or not _page_is_model(model, r.text):
-            continue
-        m = re.search(r'property=["\']og:image["\']\s+content=["\']([^"\']+)', r.text)
-        if m and "beebom.com" in m.group(1):
-            img = m.group(1)
-            tail = img.split("beebom.com/", 1)[-1].lower()
-            if "http" in tail or "geni.us" in tail:   # CMS pasted a URL as the filename
-                continue
-            return img, url
-    return None, None
+def match_slug(model, idx):
+    for v in slug_variants(model):
+        s = idx.get(compact(v))
+        if s:
+            return s
+    return None
+
+
+def closest(model, slugs, n=3):
+    toks = set(make_variant_key(model, None).split("-"))
+    scored = []
+    for s in slugs:
+        sc = len(toks & set(s.split("-")))
+        if sc:
+            scored.append((sc, s))
+    scored.sort(reverse=True)
+    return [s for _, s in scored[:n]]
+
+
+def fetch_image(slug):
+    r = _get(PROD + slug)
+    if not r or r.status_code != 200:
+        return None
+    m = re.search(r'property=["\']og:image["\']\s+content=["\']([^"\']+)', r.text)
+    if not m or "beebom.com" not in m.group(1):
+        return None
+    img = m.group(1)
+    tail = img.split("beebom.com/", 1)[-1].lower()
+    if "http" in tail or "geni.us" in tail:        # CMS pasted a URL as the filename
+        return None
+    return img
 
 
 def _targets():
-    """Distinct phone MODELS with no Beebom image yet."""
     phones = _fetch_all("phones", "model")
     specs = _fetch_all("specs", "model,image_url,image_source")
     have = {(r.get("model") or "").lower() for r in specs
@@ -105,12 +140,15 @@ def _targets():
 
 def enrich(limit=None):
     from db import host_image
+    idx, _ = load_index()
+    print(f"  {len(idx)} Beebom slugs indexed.")
     models = _targets()
     models = models[:limit] if limit else models
     print(f"{len(models)} models missing a Beebom image.\n")
     got = miss = 0
     for model in models:
-        img, page = fetch_image(model)
+        slug = match_slug(model, idx)
+        img = fetch_image(slug) if slug else None
         if not img:
             miss += 1
             print(f"  MISS   {model}")
@@ -118,28 +156,30 @@ def enrich(limit=None):
         hosted = host_image(img, f"img/{make_variant_key(model, None)}.jpg") or img
         upsert_specs(model, {"image_url": hosted, "image_source": "beebom"})
         got += 1
-        print(f"  ok     {model:34} {hosted}")
+        print(f"  ok     {model:32} -> {slug}")
         time.sleep(DELAY + random.uniform(0, DELAY))
     print(f"\nDone. images={got} misses={miss}")
 
 
 def dry_run(limit=None):
+    idx, slugs = load_index()
+    print(f"  {len(idx)} Beebom slugs indexed.")
     models = _targets()
     models = models[:limit] if limit else models
     print(f"{len(models)} models missing a Beebom image.\n")
     got = miss = 0
     for model in sorted(models):
-        img, page = fetch_image(model)
-        if img:
+        slug = match_slug(model, idx)
+        if slug:
             got += 1
-            print(f"  ok    {model:34} {img}")
+            print(f"  ok    {model:32} -> {slug}")
         else:
             miss += 1
-            print(f"  MISS  {model}")
-        time.sleep(DELAY)
+            print(f"  MISS  {model:32} -> closest: {closest(model, slugs)}")
+        time.sleep(0.05)
     total = got + miss
     print(f"\nWOULD images={got} misses={miss}" +
-          (f" (coverage={got/total*100:.0f}%)" if total else ""))
+          (f" (match={got/total*100:.0f}%)" if total else ""))
 
 
 if __name__ == "__main__":

@@ -290,6 +290,17 @@ def parse_name_from_listing(raw: str, href: str = "") -> tuple[str, str | None, 
 def clean_model(title: str) -> str:
     """Strip storage, color, and refurb noise to get a clean model name."""
     t = title
+    # Preserve parenthesised model identifiers BEFORE the generic paren strip below:
+    # Nothing/CMF "Phone (1)"/"(2a)" and iPhone "SE (2020)" carry the model number
+    # in parens, which the strip would otherwise delete (collapsing Phone 1/2/3 and
+    # SE 2020/2022). For iPhone SE, also map generation ordinals to the year, since
+    # stores mix "SE 2022" / "SE 3rd Gen" / "SE (3rd generation)" for the same phone.
+    if re.search(r"\biphone\s+se\b", t, re.I):
+        t = re.sub(r"\b1st\s+gen\w*", "2016", t, flags=re.I)
+        t = re.sub(r"\b2nd\s+gen\w*", "2020", t, flags=re.I)
+        t = re.sub(r"\b3rd\s+gen\w*", "2022", t, flags=re.I)
+        t = re.sub(r"\bSE\s*\(\s*(20\d{2})\s*\)", r"SE \1", t, flags=re.I)
+    t = re.sub(r"\bphone\s*\(\s*(\d+[a-z]?)\s*\)", r"Phone \1", t, flags=re.I)
     t = re.sub(r"\(.*?\)", " ", t)                      # remove (...) groups
     t = re.sub(r"\s*/\s*", " ", t)                       # "128GB/256GB" -> tokens
     # "+" is a model suffix (Realme 12+, Galaxy S21+) — turn it into the word
@@ -395,8 +406,9 @@ def clean_model(title: str) -> str:
     t = re.sub(r"\b(accessories|charger|cable|earphone|adapter)\b", " ", t, flags=re.I)
     # Model number noise (e.g. "SM-G991B", "CPH2197")
     t = re.sub(r"\b[A-Z]{2,4}-?[A-Z0-9]{4,}\b", " ", t)
-    # Year suffixes standalone (e.g. "iPhone 13 2021" -> "iPhone 13")
-    t = re.sub(r"\b(20[12][0-9])\b", " ", t)
+    # Year suffixes standalone (e.g. "iPhone 13 2021" -> "iPhone 13"), EXCEPT when
+    # preceded by "SE " — the year distinguishes the SE generations (2016/2020/2022).
+    t = re.sub(r"(?<![sS][eE] )\b(20[12][0-9])\b", " ", t)
     # "Series" standalone
     t = re.sub(r"\bseries\b", " ", t, flags=re.I)
     # Stray "Storage" label left by comma-style titles ("… 128GB Storage")

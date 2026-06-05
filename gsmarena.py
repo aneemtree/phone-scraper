@@ -225,17 +225,29 @@ def fetch_device(d):
 
 
 # ------------------------------------------------------------------------------ DB I/O
+def _fetch_all(table, columns):
+    """Page through every row (PostgREST caps a select at 1000 by default)."""
+    from db import supabase
+    out, start, step = [], 0, 1000
+    while True:
+        chunk = (supabase.table(table).select(columns)
+                 .range(start, start + step - 1).execute().data or [])
+        out.extend(chunk)
+        if len(chunk) < step:
+            return out
+        start += step
+
+
 def _targets(images_only=False):
     """One (key, model) per distinct phone MODEL that still needs work, so specs
     and images are fetched once per model and shared across all storage variants.
     key = coalesce(canonical_key, variant_key) (used for the row id / image path).
     A model is done when any specs row for it qualifies:
       images_only -> has an image_url; specs -> has specs OR status='not_found'."""
-    from db import supabase
-    phones = supabase.table("phones").select("variant_key,canonical_key,model").execute().data or []
+    phones = _fetch_all("phones", "variant_key,canonical_key,model")
     status = {}
     try:
-        rows = supabase.table("specs").select("model,status,specs,image_url").execute().data or []
+        rows = _fetch_all("specs", "model,status,specs,image_url")
         for r in rows:
             m = (r.get("model") or "").lower()
             st = status.setdefault(m, {"specs": False, "image": False, "nf": False})

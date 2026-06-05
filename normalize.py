@@ -178,6 +178,7 @@ SUB_BRAND_PREFIX = [
     ("pixel", "Google Pixel"),
     ("narzo", "Realme Narzo"),
     ("nord", "OnePlus Nord"),
+    ("cmf", "Nothing CMF"),
     ("mi", "Xiaomi Mi"),
 ]
 
@@ -356,6 +357,10 @@ def clean_model(title: str) -> str:
     # "Vivo iQOO …" — iQOO is a standalone brand chip (other stores list it bare),
     # so drop the redundant leading "Vivo" parent to share one key.
     t = re.sub(r"\bVivo\s+(?=iQOO\b)", "", t, flags=re.I)
+    # CMF is Nothing's sub-brand. Stores write "CMF by Nothing Phone 2 Pro"; collapse
+    # the connector so the sub-brand prefix below yields "Nothing CMF Phone 2 Pro".
+    t = re.sub(r"\bcmf\s+by\s+nothing\b", "CMF", t, flags=re.I)
+    t = re.sub(r"\bnothing\s+cmf\s+by\s+nothing\b", "Nothing CMF", t, flags=re.I)
     # "Xiaomi POCO …" — POCO is its own chip (other stores list it bare). Some
     # stores file POCO under the Xiaomi brand (e.g. gadgetrebirth), which prepends
     # "Xiaomi"; drop it so "POCO F6 Pro" shares one key cross-store.

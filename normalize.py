@@ -375,6 +375,9 @@ def clean_model(title: str) -> str:
     # Xiaomi dropped the "Mi" brand from the 12-series on ("Mi 14" -> "Xiaomi 14");
     # "Mi 11"/older keep it. Drop "Mi" only before a 12-19 flagship number.
     t = re.sub(r"\bMi\s+(1[2-9]\b)", r"\1", t, flags=re.I)
+    # "Mi 11 Lite"/"Mi 11 Lite NE": GSMArena/Beebom drop "Mi" here (vanilla "Mi 11"
+    # keeps it), so drop "Mi" only before "11 Lite".
+    t = re.sub(r"\bMi\s+(?=11\s+Lite\b)", "", t, flags=re.I)
     # "iPhone 17 Air" and "iPhone Air" are the same phone; canonicalize to "iPhone Air".
     t = re.sub(r"\biPhone\s+17\s+Air\b", "iPhone Air", t, flags=re.I)
     # "Vivo iQOO …" — iQOO is a standalone brand chip (other stores list it bare),
@@ -418,6 +421,9 @@ def clean_model(title: str) -> str:
     t = re.sub(r"(?<![sS][eE] )\b(20[12][0-9])\b", " ", t)
     # "Series" standalone
     t = re.sub(r"\bseries\b", " ", t, flags=re.I)
+    # Marketing "Edition" suffix (Realme "GT Master Edition" -> "GT Master", Galaxy
+    # "M21 Edition" -> "M21). Subset matching tolerates it where GSMArena keeps it.
+    t = re.sub(r"\bedition\b", " ", t, flags=re.I)
     # Stray "Storage" label left by comma-style titles ("… 128GB Storage")
     t = re.sub(r"\bstorage\b", " ", t, flags=re.I)
     # Marketing tokens some stores append ("Galaxy S25 Ultra AI New", "Z Fold5

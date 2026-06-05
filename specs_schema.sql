@@ -45,15 +45,16 @@ create trigger specs_set_updated_at
 
 -- Fast lookup of which keys still need enrichment.
 create index if not exists specs_status_idx on specs (status);
+create index if not exists specs_model_idx on specs (model);
 
 -- ---------------------------------------------------------------------------
--- offers view: the canonical GSMArena/admin image is THE card image (stores are no
--- longer scraped for images). Run AFTER populating specs (python3 gsmarena.py) so
--- cards aren't blank during the switch.
+-- offers view: specs and the canonical image are per-MODEL, so every storage
+-- variant of a phone shares one spec sheet/image. The lateral picks the best
+-- specs row for the model (prefer one with specs, then with an image).
 create or replace view offers as
  select coalesce(ph.canonical_key, ph.variant_key) as variant_key,
     ph.model, ph.storage, ph.ram, ph.site, ph.name, ph.url,
-    sp.image_url            as image_url,     -- canonical (GSMArena/admin) image
+    sp.image_url            as image_url,
     lp.price, lp.availability, lp.condition, lp.rating, lp.review_count,
     lp.warranty_months, lp.url as condition_url,
     s.display_name as store_name, s.logo_url, s.default_warranty_months, s.trust_score,
@@ -63,20 +64,23 @@ create or replace view offers as
    from phones ph
      join latest_prices lp on lp.phone_id = ph.id
      left join stores s on s.site = ph.site
-     left join specs sp on sp.variant_key = coalesce(ph.canonical_key, ph.variant_key)
+     left join lateral (
+       select image_url, specs, gsm_url
+         from specs sx
+        where sx.model = ph.model
+        order by (sx.specs is not null) desc, (sx.image_url is not null) desc,
+                 sx.updated_at desc
+        limit 1
+     ) sp on true
   where coalesce(ph.canonical_key, ph.variant_key) is not null;
 
--- Admin gap list: in-stock phones with no canonical image yet (no GSMArena match,
--- or matched without an image, or awaiting an admin upload). The admin reads this,
--- uploads an image, and writes specs.image_url (image_source='admin') — e.g. via
--- `python3 gsmarena.py --set-image <variant_key> <image_url>`.
+-- Admin gap list: in-stock MODELS with no canonical image yet.
 create or replace view missing_images as
- select coalesce(ph.canonical_key, ph.variant_key) as variant_key,
-        max(ph.model) as model,
+ select ph.model,
         max(ph.name)  as sample_name,
         count(*)      as offer_count
    from phones ph
-     left join specs sp on sp.variant_key = coalesce(ph.canonical_key, ph.variant_key)
   where ph.in_stock = true
-    and sp.image_url is null
-  group by 1;
+    and not exists (select 1 from specs sx
+                     where sx.model = ph.model and sx.image_url is not null)
+  group by ph.model;

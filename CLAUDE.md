@@ -102,17 +102,21 @@ ONLY by GSMArena enrichment (path `specs/{variant_key}.jpg`) and admin uploads
 scrapers' call sites (no download/upload) — phones.image_url is no longer used for
 display. Config via env: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
 R2_BUCKET, R2_PUBLIC_BASE_URL. Phones with no canonical image surface in the
-`missing_images` view for manual admin upload (gsmarena.set_image / `--set-image`).
+`missing_images` view (by MODEL) for manual admin upload
+(gsmarena.set_image / `python3 gsmarena.py --set-image "<model>" <url>`).
 The DB stays on Supabase. (Legacy per-store R2 images under `{site}/…` are now
 orphaned and can be deleted to reclaim space.)
 
 ### GSMArena specs & canonical images (gsmarena.py)
-Enriches each phone CARD (keyed by variant_key = model+storage, NOT grade) with a
-spec sheet and a canonical product image from GSMArena. Runs INCREMENTALLY: only
-variant_keys present in `phones` but absent from `specs` are processed, and each key
-is fetched ONCE — a successful match OR a recorded `status='not_found'` is never
-re-fetched (so it self-limits; most runs are cheap). Key = coalesce(canonical_key,
-variant_key).
+Enriches each phone MODEL with a spec sheet and a canonical product image from
+GSMArena. Specs/image are per-MODEL (display, chipset, camera, image are identical
+across storage), so the offers view joins specs on `phones.model` (a lateral that
+picks the best row per model) and EVERY storage variant of a phone shares one spec
+sheet/image. Enrichment dedupes by model: `_targets()` returns one (key, model) per
+distinct model still missing work, so a model is fetched ONCE (not once per storage)
+— a successful match OR a recorded `status='not_found'` is never re-fetched (it
+self-limits; most runs are cheap). The specs row PK stays variant_key (the sample
+key/image path); admin uploads key by the storage-less model slug.
 
 No GSMArena API / search rate-limit problem: its autocomplete downloads the ENTIRE
 device DB as one static JSON (`/quicksearch-<n>.jpg`): data[0]={maker_id:name},

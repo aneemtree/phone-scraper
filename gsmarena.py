@@ -225,30 +225,40 @@ def fetch_device(d):
 
 
 # ------------------------------------------------------------------------------ DB I/O
-def _missing_keys():
-    """Distinct (key, sample model) present in phones but absent from specs.
-    key = coalesce(canonical_key, variant_key) to honour the manual-merge fallback."""
+def _targets(images_only=False):
+    """One (key, model) per distinct phone MODEL that still needs work, so specs
+    and images are fetched once per model and shared across all storage variants.
+    key = coalesce(canonical_key, variant_key) (used for the row id / image path).
+    A model is done when any specs row for it qualifies:
+      images_only -> has an image_url; specs -> has specs OR status='not_found'."""
     from db import supabase
     phones = supabase.table("phones").select("variant_key,canonical_key,model").execute().data or []
+    status = {}
     try:
-        rows = supabase.table("specs").select("variant_key,status,specs").execute().data or []
-        # A key is "done" only if it's a recorded not_found OR an ok row that
-        # actually has specs. Earlier runs that saved empty 'ok' rows (GSMArena
-        # throttle) are re-processed.
-        have = {r["variant_key"] for r in rows
-                if r.get("status") == "not_found" or
-                (r.get("status") == "ok" and r.get("specs"))}
+        rows = supabase.table("specs").select("model,status,specs,image_url").execute().data or []
+        for r in rows:
+            m = r.get("model") or ""
+            st = status.setdefault(m, {"specs": False, "image": False, "nf": False})
+            if r.get("specs"):
+                st["specs"] = True
+            if r.get("image_url"):
+                st["image"] = True
+            if r.get("status") == "not_found":
+                st["nf"] = True
     except Exception as e:
-        # specs table not created yet (or wrong schema) — treat nothing as done so
-        # --dry can still report match quality. The real run needs specs_schema.sql.
         print(f"  (specs table not ready: {e}; assuming none enriched)")
-        have = set()
-    todo = {}
+    todo, seen = [], set()
     for p in phones:
+        model = p.get("model") or ""
         key = p.get("canonical_key") or p.get("variant_key")
-        if not key or key in have or key in todo:
+        if not model or not key or model in seen:
             continue
-        todo[key] = p.get("model") or ""
+        st = status.get(model)
+        done = (st and st["image"]) if images_only else (st and (st["specs"] or st["nf"]))
+        if done:
+            continue
+        seen.add(model)
+        todo.append((key, model))
     return todo
 
 
@@ -266,17 +276,19 @@ def save_specs(key, model, device, specs, image_url, score, status, image_source
     _note_op(1)
 
 
-def set_image(variant_key, source_url):
-    """Admin: host an image (URL) as the canonical image for a variant_key and mark
-    its specs row image_source='admin'. Used to fill gaps GSMArena couldn't match.
-    The variant_key row must already exist (it will after an enrich run)."""
+def set_image(model, source_url):
+    """Admin: host an image as the canonical image for a MODEL (shared across all
+    its storage variants) and mark the specs row image_source='admin'. Fills gaps
+    GSMArena couldn't match. Pass the exact model name shown in missing_images."""
     from db import supabase, _exec, host_image
-    hosted = host_image(source_url, f"admin/{variant_key}.jpg") or source_url
+    from normalize import make_variant_key
+    key = make_variant_key(model, None)
+    hosted = host_image(source_url, f"admin/{key}.jpg") or source_url
     _exec(lambda: supabase.table("specs").upsert(
-        {"variant_key": variant_key, "image_url": hosted,
+        {"variant_key": key, "model": model, "image_url": hosted,
          "image_source": "admin", "status": "ok"},
         on_conflict="variant_key").execute())
-    print(f"set admin image for {variant_key}: {hosted}")
+    print(f"set admin image for {model}: {hosted}")
     return hosted
 
 
@@ -286,12 +298,10 @@ def enrich(limit=None, images_only=False):
     print("Loading GSMArena device DB...")
     devices = load_devices()
     print(f"  {len(devices)} devices loaded.")
-    todo = _missing_keys()
-    keys = list(todo.items())
-    if limit:
-        keys = keys[:limit]
+    todo = _targets(images_only=images_only)
+    keys = todo[:limit] if limit else todo
     mode = "images" if images_only else "specs"
-    print(f"{len(keys)} variant_keys missing {mode}.\n")
+    print(f"{len(keys)} models missing {mode}.\n")
 
     matched = notfound = blocked = 0
     fails = 0
@@ -338,11 +348,9 @@ def dry_run(limit=None):
     print("Loading GSMArena device DB...")
     devices = load_devices()
     print(f"  {len(devices)} devices loaded.")
-    todo = _missing_keys()
-    keys = list(todo.items())
-    if limit:
-        keys = keys[:limit]
-    print(f"{len(keys)} variant_keys missing specs.\n")
+    todo = _targets(images_only=False)
+    keys = todo[:limit] if limit else todo
+    print(f"{len(keys)} models missing specs.\n")
     matched = notfound = 0
     sample_done = 0
     for key, model in sorted(keys, key=lambda kv: kv[1]):

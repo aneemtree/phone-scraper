@@ -31,15 +31,29 @@ DELAY = float(__import__("os").environ.get("BEEBOM_DELAY") or 1.0)
 
 def slug_candidates(model):
     base = make_variant_key(model, None)
-    out = [base, base + "-5g"]
-    out.append(re.sub(r"^xiaomi-(?=redmi|poco)", "", base))   # beebom drops Xiaomi for Redmi/Poco
-    out.append(re.sub(r"^apple-", "", base))                   # "apple-iphone-11" also lives at "iphone-11"
-    seen, uniq = set(), []
-    for s in out:
-        if s and s not in seen:
-            seen.add(s)
-            uniq.append(s)
-    return uniq
+    cands = [base]
+    def add(s):
+        if s and s not in cands:
+            cands.append(s)
+    if base.startswith("apple-"):
+        add(base[len("apple-"):])
+    if re.match(r"^xiaomi-(redmi|poco|mi-)", base):
+        add(re.sub(r"^xiaomi-", "", base))
+    if base.startswith("nothing-cmf"):
+        add(base[len("nothing-"):])
+    if "-ce-" in base:
+        add(re.sub(r"-ce-(\d)", r"-ce\1", base))
+    if re.search(r"-(fold|flip)-\d", base):
+        add(re.sub(r"-(fold|flip)-(\d)", r"-\1\2", base))
+    if base.startswith("motorola-moto-"):
+        rest = base[len("motorola-moto-"):]
+        add("motorola-" + rest)
+        add("moto-" + rest)
+    elif base.startswith("motorola-"):
+        add("moto-" + base[len("motorola-"):])
+    for c in list(cands):                     # also try the 5G-suffixed form of each
+        add(c + "-5g")
+    return cands
 
 
 def _page_is_model(model, html):

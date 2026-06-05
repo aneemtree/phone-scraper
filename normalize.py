@@ -36,6 +36,7 @@ COLORS = [
     "ash", "chromatic", "meteorite", "cloud", "fluid", "prism", "oxygen",
     "dash", "sunshine", "sunset", "orange", "emerald", "brown", "pearl",
     "peari", "lilac", "iceblue", "graphite", "graphit", "awesome", "mostly",
+    "prism cube", "prism crush", "cube", "crush",
 ]
 
 

@@ -56,16 +56,32 @@ def slug_variants(model):
             out.append(s)
     if base.startswith("apple-"):
         add(base[len("apple-"):])
-    if re.match(r"^xiaomi-(redmi|poco|mi-)", base):
-        add(base[len("xiaomi-"):])
     if base.startswith("nothing-cmf"):
         add(base[len("nothing-"):])
+    # Xiaomi family: Beebom mixes xiaomi-/mi-/redmi-/poco- prefixes inconsistently.
+    if base.startswith("xiaomi-mi-"):
+        rest = base[len("xiaomi-mi-"):]
+        add("mi-" + rest)                 # mi-11x
+        add("xiaomi-" + rest)             # xiaomi-11-lite-ne
+    elif base.startswith("xiaomi-redmi-"):
+        add(base[len("xiaomi-"):])        # redmi-note-13
+    elif base.startswith("xiaomi-poco-"):
+        add(base[len("xiaomi-"):])        # poco-f5
+    elif base.startswith("xiaomi-"):
+        add("xiaomi-mi-" + base[len("xiaomi-"):])   # xiaomi-mi-11-lite
+    if base.startswith("poco-"):
+        add("xiaomi-" + base)             # xiaomi-poco-f5
+    if base.startswith("redmi-"):
+        add("xiaomi-" + base)
+    # Motorola: Beebom uses both "moto-" and "motorola-moto-".
     if base.startswith("motorola-moto-"):
         rest = base[len("motorola-moto-"):]
         add("motorola-" + rest)
         add("moto-" + rest)
     elif base.startswith("motorola-"):
-        add("moto-" + base[len("motorola-"):])
+        rest = base[len("motorola-"):]
+        add("moto-" + rest)
+        add("motorola-moto-" + rest)
     return out
 
 

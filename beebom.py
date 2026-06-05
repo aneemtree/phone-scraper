@@ -23,7 +23,7 @@ import time
 import random
 
 from normalize import make_variant_key
-from gsmarena import _get, _fetch_all, upsert_specs
+from gsmarena import _get, _fetch_all, upsert_specs, _toks
 
 BASE = "https://gadgets.beebom.com/mobile/"
 DELAY = float(__import__("os").environ.get("BEEBOM_DELAY") or 1.0)
@@ -42,12 +42,26 @@ def slug_candidates(model):
     return uniq
 
 
+def _page_is_model(model, html):
+    """Guard against slug collisions: the page title must contain the model's
+    non-brand tokens (so e.g. an 'oppo-reno-10' slug landing on a Honor page is
+    rejected). Does NOT catch a correct page with a wrong CMS image."""
+    m = (re.search(r'property=["\']og:title["\']\s+content=["\']([^"\']+)', html)
+         or re.search(r'<title[^>]*>([^<]+)', html))
+    if not m:
+        return False
+    title = set(_toks(m.group(1)))
+    ours = _toks(model)
+    rest = set(ours[1:]) if len(ours) > 1 else set(ours)
+    return rest <= title
+
+
 def fetch_image(model):
     """Return (image_url, page_url) from Beebom, or (None, None)."""
     for slug in slug_candidates(model):
         url = BASE + slug
         r = _get(url)
-        if not r or r.status_code != 200:
+        if not r or r.status_code != 200 or not _page_is_model(model, r.text):
             continue
         m = re.search(r'property=["\']og:image["\']\s+content=["\']([^"\']+)', r.text)
         if m and "beebom.com" in m.group(1):

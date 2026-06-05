@@ -111,6 +111,27 @@ def device_alias_tokens(d):
     return set(_toks(d["full"] + " " + d["keywords"] + " " + d["short"]))
 
 
+def closest_devices(model, devices, n=3):
+    """Best-effort suggestions for a model GSMArena didn't match: device names
+    ranked by token overlap (brand-first), for eyeballing naming mismatches."""
+    ours = set(_toks(model))
+    if not ours:
+        return []
+    scored = []
+    for d in devices:
+        sc = len(ours & device_alias_tokens(d))
+        if sc:
+            scored.append((sc, d["full"]))
+    scored.sort(key=lambda x: -x[0])
+    out = []
+    for _, name in scored:
+        if name not in out:
+            out.append(name)
+        if len(out) >= n:
+            break
+    return out
+
+
 def best_match(model, devices):
     """Return (device, score) or (None, 0.0). Brand-aware subset match; fewest
     extra name tokens wins; reject if too loose."""
@@ -388,6 +409,29 @@ def dry_run(limit=None):
           f"(rate={matched/(matched+notfound)*100:.0f}%)" if (matched+notfound) else "")
 
 
+def audit(limit=None):
+    """Print model -> matched GSMArena device (or NOT FOUND + closest) for ALL
+    distinct phone models, so naming mismatches are visible. No writes/fetches."""
+    print("Loading GSMArena device DB...")
+    devices = load_devices()
+    print(f"  {len(devices)} devices loaded.")
+    models = sorted({(p.get("model") or "") for p in _fetch_all("phones", "model")} - {""})
+    models = models[:limit] if limit else models
+    print(f"{len(models)} models.\n")
+    matched = notfound = 0
+    for model in models:
+        device, score = best_match(model, devices)
+        if device:
+            matched += 1
+            print(f"  ok({score})  {model:32} -> {device['full']}")
+        else:
+            notfound += 1
+            print(f"  MISS   {model:32} -> closest: {closest_devices(model, devices)}")
+    total = matched + notfound
+    print(f"\nmatched={matched} not_found={notfound}" +
+          (f" (rate={matched/total*100:.0f}%)" if total else ""))
+
+
 if __name__ == "__main__":
     if "--set-image" in sys.argv:
         i = sys.argv.index("--set-image")
@@ -396,7 +440,9 @@ if __name__ == "__main__":
     lim = None
     if "--limit" in sys.argv:
         lim = int(sys.argv[sys.argv.index("--limit") + 1])
-    if "--dry" in sys.argv:
+    if "--audit" in sys.argv:
+        audit(lim)
+    elif "--dry" in sys.argv:
         dry_run(lim)
     else:
         from obs import init_sentry, log_error

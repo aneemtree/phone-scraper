@@ -36,7 +36,7 @@ COLORS = [
     "ash", "chromatic", "meteorite", "cloud", "fluid", "prism", "oxygen",
     "dash", "sunshine", "sunset", "orange", "emerald", "brown", "pearl",
     "peari", "lilac", "iceblue", "graphite", "graphit", "awesome", "mostly",
-    "prism cube", "prism crush", "cube", "crush", "lunar", "deepsea",
+    "prism cube", "prism crush", "cube", "crush", "lunar", "deepsea", "stormy",
 ]
 
 # Roman numerals (II-XII) that title-casing would lower-case (e.g. Sony "Xperia 1

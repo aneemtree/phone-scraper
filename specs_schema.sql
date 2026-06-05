@@ -51,7 +51,10 @@ create index if not exists specs_model_idx on specs (model);
 -- offers view: specs and the canonical image are per-MODEL, so every storage
 -- variant of a phone shares one spec sheet/image. The lateral picks the best
 -- specs row for the model (prefer one with specs, then with an image).
-create or replace view offers as
+drop view if exists missing_images;
+drop view if exists offers;
+
+create view offers as
  select coalesce(ph.canonical_key, ph.variant_key) as variant_key,
     ph.model, ph.storage, ph.ram, ph.site, ph.name, ph.url,
     sp.image_url            as image_url,
@@ -75,7 +78,7 @@ create or replace view offers as
   where coalesce(ph.canonical_key, ph.variant_key) is not null;
 
 -- Admin gap list: in-stock MODELS with no canonical image yet.
-create or replace view missing_images as
+create view missing_images as
  select ph.model,
         max(ph.name)  as sample_name,
         count(*)      as offer_count

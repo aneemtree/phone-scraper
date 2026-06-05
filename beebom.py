@@ -79,7 +79,11 @@ def fetch_image(model):
             continue
         m = re.search(r'property=["\']og:image["\']\s+content=["\']([^"\']+)', r.text)
         if m and "beebom.com" in m.group(1):
-            return m.group(1), url
+            img = m.group(1)
+            tail = img.split("beebom.com/", 1)[-1].lower()
+            if "http" in tail or "geni.us" in tail:   # CMS pasted a URL as the filename
+                continue
+            return img, url
     return None, None
 
 

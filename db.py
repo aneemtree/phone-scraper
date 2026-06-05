@@ -293,7 +293,9 @@ def host_image(source_url, dest_path):
 
     # 2) Download the source image.
     try:
-        r = _requests.get(source_url, timeout=30)
+        r = _requests.get(source_url, timeout=30, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"})
         r.raise_for_status()
         data = r.content
         content_type = r.headers.get("Content-Type", "image/jpeg")

@@ -281,7 +281,7 @@ def set_image(variant_key, source_url):
 
 
 # -------------------------------------------------------------------------------- runs
-def enrich(limit=None):
+def enrich(limit=None, images_only=False):
     from db import host_image
     print("Loading GSMArena device DB...")
     devices = load_devices()
@@ -290,7 +290,8 @@ def enrich(limit=None):
     keys = list(todo.items())
     if limit:
         keys = keys[:limit]
-    print(f"{len(keys)} variant_keys missing specs.\n")
+    mode = "images" if images_only else "specs"
+    print(f"{len(keys)} variant_keys missing {mode}.\n")
 
     matched = notfound = blocked = 0
     fails = 0
@@ -301,17 +302,22 @@ def enrich(limit=None):
             notfound += 1
             print(f"  NOT FOUND  {model:32} [{key}]")
             continue
+        if images_only:
+            img = f"https://fdn2.gsmarena.com/vv/bigpic/{device['image']}" if device["image"] else None
+            hosted = host_image(img, f"specs/{key}.jpg") if img else None
+            save_specs(key, model, device, None, hosted or img, score, "ok",
+                       image_source="gsmarena")
+            matched += 1
+            print(f"  img({score})  {model:30} -> {device['full']:32} [{key}]")
+            time.sleep(1.0 + random.uniform(0, 1.0))
+            continue
         specs, img, _, ok = fetch_device(device)
         if not ok:
-            # Throttle/challenge page (HTTP 200 but no data-spec). Do NOT persist an
-            # empty sheet as 'ok' (it would never be re-fetched) — leave the key
-            # unenriched so a later run retries; back off, and bail if GSMArena keeps
-            # blocking (continuing just burns the cooldown).
             fails += 1
             blocked += 1
             print(f"  BLOCKED    {model:30} -> {device['full']} (no specs; retries next run)")
             if fails >= 5:
-                print("\nGSMArena is throttling (5 blocked in a row). Stopping — "
+                print("\nGSMArena is throttling (5 blocked in a row). Stopping - "
                       "re-run later to resume from where it left off.")
                 break
             time.sleep(30)
@@ -374,7 +380,7 @@ if __name__ == "__main__":
         from obs import init_sentry, log_error
         init_sentry("gsmarena")
         try:
-            enrich(lim)
+            enrich(lim, images_only=("--images-only" in sys.argv))
         except Exception as e:
             log_error(e, site="gsmarena", phase="enrich")
             raise

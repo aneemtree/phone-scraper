@@ -370,6 +370,13 @@ def clean_model(title: str) -> str:
     # / "Mi Redmi Note 10"). Redmi is its own line — drop the stray "Mi" so it
     # collapses to "Xiaomi Redmi ..." and matches the other stores' key.
     t = re.sub(r"\bMi\s+(?=Redmi\b)", "", t, flags=re.I)
+    # Doubled "Mi Mi" (e.g. "Xiaomi Mi Mi 5") -> single "Mi".
+    t = re.sub(r"\bMi\s+Mi\b", "Mi", t, flags=re.I)
+    # Xiaomi dropped the "Mi" brand from the 12-series on ("Mi 14" -> "Xiaomi 14");
+    # "Mi 11"/older keep it. Drop "Mi" only before a 12-19 flagship number.
+    t = re.sub(r"\bMi\s+(1[2-9]\b)", r"\1", t, flags=re.I)
+    # "iPhone 17 Air" and "iPhone Air" are the same phone; canonicalize to "iPhone Air".
+    t = re.sub(r"\biPhone\s+17\s+Air\b", "iPhone Air", t, flags=re.I)
     # "Vivo iQOO …" — iQOO is a standalone brand chip (other stores list it bare),
     # so drop the redundant leading "Vivo" parent to share one key.
     t = re.sub(r"\bVivo\s+(?=iQOO\b)", "", t, flags=re.I)
@@ -450,6 +457,7 @@ def clean_model(title: str) -> str:
     # iPhone X-series suffixes: normalize "Xs"/"Xr" casing to "XS"/"XR".
     t = re.sub(r"\bxs\b", "XS", t, flags=re.I)
     t = re.sub(r"\bxr\b", "XR", t, flags=re.I)
+    t = re.sub(r"\bgt\b", "GT", t, flags=re.I)
     t = " ".join(w.upper() if w.lower() in ROMAN_NUMERALS else w for w in t.split())
     return t
 

@@ -259,6 +259,29 @@ def _fetch_all(table, columns):
         start += step
 
 
+def load_aliases():
+    """model.lower() -> [alt names] from the model_aliases table (manual matching
+    overrides). Empty/missing table is fine."""
+    out = {}
+    try:
+        for r in _fetch_all("model_aliases", "model,alt_name_1,alt_name_2"):
+            alts = [a for a in (r.get("alt_name_1"), r.get("alt_name_2")) if a]
+            if r.get("model") and alts:
+                out[r["model"].lower()] = alts
+    except Exception as e:
+        print(f"  (model_aliases not available: {e})")
+    return out
+
+
+def match_with_aliases(model, devices, aliases):
+    """best_match on the model name, then on any manual alias, first hit wins."""
+    for name in [model] + aliases.get(model.lower(), []):
+        device, score = best_match(name, devices)
+        if device:
+            return device, score
+    return None, 0.0
+
+
 def _targets(images_only=False):
     """One (key, model) per distinct phone MODEL that still needs work, so specs
     and images are fetched once per model and shared across all storage variants.
@@ -343,6 +366,7 @@ def enrich(limit=None):
     from normalize import make_variant_key
     print("Loading GSMArena device DB...")
     devices = load_devices()
+    aliases = load_aliases()
     print(f"  {len(devices)} devices loaded.")
     todo = _targets()
     keys = todo[:limit] if limit else todo
@@ -351,7 +375,7 @@ def enrich(limit=None):
     matched = notfound = blocked = 0
     fails = 0
     for key, model in keys:
-        device, score = best_match(model, devices)
+        device, score = match_with_aliases(model, devices, aliases)
         if not device:
             save_specs(key, model, None, None, None, 0.0, "not_found")
             notfound += 1
@@ -382,6 +406,7 @@ def enrich(limit=None):
 def dry_run(limit=None):
     print("Loading GSMArena device DB...")
     devices = load_devices()
+    aliases = load_aliases()
     print(f"  {len(devices)} devices loaded.")
     todo = _targets(images_only=False)
     keys = todo[:limit] if limit else todo
@@ -389,7 +414,7 @@ def dry_run(limit=None):
     matched = notfound = 0
     sample_done = 0
     for key, model in sorted(keys, key=lambda kv: kv[1]):
-        device, score = best_match(model, devices)
+        device, score = match_with_aliases(model, devices, aliases)
         if not device:
             notfound += 1
             print(f"  NOT FOUND   {model}")
@@ -414,13 +439,14 @@ def audit(limit=None):
     distinct phone models, so naming mismatches are visible. No writes/fetches."""
     print("Loading GSMArena device DB...")
     devices = load_devices()
+    aliases = load_aliases()
     print(f"  {len(devices)} devices loaded.")
     models = sorted({(p.get("model") or "") for p in _fetch_all("phones", "model")} - {""})
     models = models[:limit] if limit else models
     print(f"{len(models)} models.\n")
     matched = notfound = 0
     for model in models:
-        device, score = best_match(model, devices)
+        device, score = match_with_aliases(model, devices, aliases)
         if device:
             matched += 1
             print(f"  ok({score})  {model:32} -> {device['full']}")

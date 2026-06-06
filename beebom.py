@@ -27,7 +27,7 @@ import random
 import tempfile
 
 from normalize import make_variant_key
-from gsmarena import _get, _fetch_all, upsert_specs
+from gsmarena import _get, _fetch_all, upsert_specs, load_aliases
 
 SITEMAP = "https://gadgets.beebom.com/all_mobiles.xml"
 PROD = "https://gadgets.beebom.com/mobile/"
@@ -106,11 +106,12 @@ def load_index():
     return idx, slugs
 
 
-def match_slug(model, idx):
-    for v in slug_variants(model):
-        s = idx.get(compact(v))
-        if s:
-            return s
+def match_slug(model, idx, aliases=None):
+    for name in [model] + ((aliases or {}).get(model.lower(), [])):
+        for v in slug_variants(name):
+            s = idx.get(compact(v))
+            if s:
+                return s
     return None
 
 
@@ -157,13 +158,14 @@ def _targets():
 def enrich(limit=None):
     from db import host_image
     idx, _ = load_index()
+    aliases = load_aliases()
     print(f"  {len(idx)} Beebom slugs indexed.")
     models = _targets()
     models = models[:limit] if limit else models
     print(f"{len(models)} models missing a Beebom image.\n")
     got = miss = 0
     for model in models:
-        slug = match_slug(model, idx)
+        slug = match_slug(model, idx, aliases)
         img = fetch_image(slug) if slug else None
         if not img:
             miss += 1
@@ -179,13 +181,14 @@ def enrich(limit=None):
 
 def dry_run(limit=None):
     idx, slugs = load_index()
+    aliases = load_aliases()
     print(f"  {len(idx)} Beebom slugs indexed.")
     models = _targets()
     models = models[:limit] if limit else models
     print(f"{len(models)} models missing a Beebom image.\n")
     got = miss = 0
     for model in sorted(models):
-        slug = match_slug(model, idx)
+        slug = match_slug(model, idx, aliases)
         if slug:
             got += 1
             print(f"  ok    {model:32} -> {slug}")

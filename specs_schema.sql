@@ -91,3 +91,14 @@ create view missing_images as
                      where lower(sx.model) = lower(ph.model)
                        and coalesce(sx.image_url, sx.image_fallback) is not null)
   group by ph.model;
+
+-- ---------------------------------------------------------------------------
+-- Manual matching overrides. When a model's normalized name doesn't match
+-- GSMArena/Beebom, add a known-good variation here; both matchers try the model
+-- name AND these aliases. Keyed by the exact `model` string (case-insensitive).
+create table if not exists model_aliases (
+  model       text primary key,
+  alt_name_1  text,
+  alt_name_2  text,
+  updated_at  timestamptz not null default now()
+);

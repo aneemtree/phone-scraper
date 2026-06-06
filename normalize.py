@@ -177,7 +177,6 @@ SUB_BRAND_PREFIX = [
     ("iphone", "Apple iPhone"),
     ("ipad", "Apple iPad"),
     ("galaxy", "Samsung Galaxy"),
-    ("moto", "Motorola Moto"),
     ("redmi", "Xiaomi Redmi"),
     ("poco", "POCO"),
     ("pixel", "Google Pixel"),
@@ -391,6 +390,10 @@ def clean_model(title: str) -> str:
     # stores file POCO under the Xiaomi brand (e.g. gadgetrebirth), which prepends
     # "Xiaomi"; drop it so "POCO F6 Pro" shares one key cross-store.
     t = re.sub(r"\bXiaomi\s+(?=POCO\b)", "", t, flags=re.I)
+    # Motorola: stores mix "Moto X", "Motorola Moto X" and "Motorola X" for the same
+    # phone. Collapse the redundant "Moto" so all become "Motorola X" (one card).
+    t = re.sub(r"\bmotorola\s+moto\b", "Motorola", t, flags=re.I)
+    t = re.sub(r"\bmoto\b", "Motorola", t, flags=re.I)
     # Samsung's Galaxy lines are sometimes listed WITHOUT the "Galaxy" word
     # (itradeit: "Samsung S25 Ultra", "Samsung Note 20"). Insert it so the key
     # matches the stores that include it ("Samsung Galaxy S25 Ultra"). Only when

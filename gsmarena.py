@@ -53,10 +53,9 @@ _CTX.verify_mode = ssl.CERT_NONE
 # Tokens that don't help identify a model (connectivity/marketing/packaging noise).
 _STOP = set("5g 4g 3g 2g lte volte nfc android smartphone phone with dual sim "
             "esim e-sim physical new moto".split())
-# "moto" is dropped: clean_model adds the Motorola sub-brand ("Motorola Moto Razr
-# 50 Ultra"), but GSMArena lists Razr without it ("Motorola Razr 50 Ultra"); the
-# redundant token otherwise breaks the subset match. Moto G/E still match (their
-# "moto" becomes a tolerated extra device token).
+# "moto" is dropped so GSMArena's "Motorola Moto G54" still subset-matches our
+# "Motorola G54" (clean_model now collapses Moto into Motorola); the device's stray
+# "moto" token is simply ignored on both sides.
 
 
 class _Resp:

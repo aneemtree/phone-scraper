@@ -397,7 +397,7 @@ def enrich(limit=None):
         matched += 1
         print(f"  ok({score})  {model:30} -> {device['full']:32} "
               f"({len(specs or {})} specs) [{key}]")
-        time.sleep(DELAY + random.uniform(0, DELAY))
+        time.sleep(DELAY + random.uniform(0, 0.5))
 
     print(f"\nDone. matched={matched} not_found={notfound} blocked={blocked}")
 

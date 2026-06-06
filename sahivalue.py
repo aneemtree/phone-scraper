@@ -281,6 +281,7 @@ def scrape():
 
     # best[(variant_key, condition)] = lowest price offer
     best = {}
+    read_ok = 0
 
     for idx, (prod_url, badge) in enumerate(url_map.items(), 1):
         try:
@@ -290,6 +291,8 @@ def scrape():
             log_error(e, site=SITE, url=prod_url)
             time.sleep(DELAY)
             continue
+        if model is not None:          # fetch_product_variants returns model=None on a failed read
+            read_ok += 1
 
         if not variants:
             print(f"  [{idx}/{len(url_map)}] {prod_url}: 0 variants")
@@ -334,8 +337,13 @@ def scrape():
         saved += 1
         print(f"  saved: {o['name']:40} [{condition:20}] {o['availability']:12} ₹{o['price']:.0f}")
 
-    # Phones not seen in this run -> out of stock (guarded against partial runs).
-    mark_unseen_out_of_stock(SITE, run_started_at)
+    # Gate the OOS sweep on scraper HEALTH: fraction of product pages read
+    # successfully (model is not None). A block collapses read_ok -> skip sweep.
+    total = len(url_map)
+    ratio = (read_ok / total) if total else 0.0
+    run_complete = bool(total) and ratio >= 0.7
+    print(f"Read OK: {read_ok}/{total} ({ratio*100:.0f}%) — run_complete={run_complete}")
+    mark_unseen_out_of_stock(SITE, run_started_at, run_complete=run_complete)
 
     print(f"\nDone. Saved {saved} offers from {SITE}.")
 

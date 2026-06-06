@@ -197,7 +197,7 @@ def scrape():
         print(f"  saved: {o['name']:40} [{condition:15}] ₹{o['price']:.0f}")
 
     # Phones not seen in this run -> out of stock (guarded against partial runs).
-    mark_unseen_out_of_stock(SITE, run_started_at)
+    mark_unseen_out_of_stock(SITE, run_started_at, run_complete=bool(best))
 
     print(f"\nDone. Saved {saved} offers from {SITE}.")
 

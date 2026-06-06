@@ -226,6 +226,7 @@ def scrape():
     products = get_product_slugs()
     print(f"Found {len(products)} products to visit ({WORKERS} workers).")
     best = {}
+    read_ok = 0
 
     with ThreadPoolExecutor(max_workers=WORKERS) as ex:
         futures = {ex.submit(scrape_one, prod["slug"]): prod for prod in products}
@@ -238,6 +239,7 @@ def scrape():
                 print(f"  {slug}: ERROR {str(e)[:80]}")
                 log_error(e, site=SITE, slug=slug)
                 continue
+            read_ok += 1            # page scraped without error (rows may be empty)
 
             # Filter non-phones by the ACTUAL product title, not just the slug.
             # The slug-level is_phone() check at collection time misses items whose
@@ -281,8 +283,12 @@ def scrape():
         saved += 1
         print(f"  saved: {o['name']:28} [{cond:16}] ₹{o['price']:.0f}")
 
-    # Phones not seen in this run -> out of stock (guarded against partial runs).
-    mark_unseen_out_of_stock(SITE, run_started_at)
+    # Gate the OOS sweep on scraper HEALTH: fraction of product pages scraped
+    # without error (a block/Playwright failure collapses read_ok -> skip sweep).
+    ratio = (read_ok / len(products)) if products else 0.0
+    run_complete = bool(products) and ratio >= 0.7
+    print(f"Read OK: {read_ok}/{len(products)} ({ratio*100:.0f}%) — run_complete={run_complete}")
+    mark_unseen_out_of_stock(SITE, run_started_at, run_complete=run_complete)
 
     print(f"\nDone. Saved {saved} (variant, condition) offers from {SITE}.")
 

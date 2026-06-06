@@ -321,7 +321,7 @@ def scrape():
         saved += 1
         print(f"  saved: {o['name']:34} [{o['condition']:18}] ₹{o['price']:.0f}  [{o['availability']}]")
 
-    mark_unseen_out_of_stock(SITE, run_started_at)
+    mark_unseen_out_of_stock(SITE, run_started_at, run_complete=bool(best))
     print(f"\nDone. Saved {saved} offers from {SITE}.")
 
 

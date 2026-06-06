@@ -149,12 +149,12 @@ def parse_product_page(path):
             break
         except requests.exceptions.Timeout:
             if attempt == 2:
-                return []
+                return None        # read failure (distinct from a parsed-but-empty page)
             time.sleep(2)
         except Exception:
-            return []
+            return None
     if not r or r.status_code != 200:
-        return []
+        return None
 
     chunks = re.findall(r'self\.__next_f\.push\(\[\d+,(".*?")\]\)', r.text, re.S)
     payload = "".join(json.loads(c) for c in chunks if c.startswith('"'))
@@ -170,11 +170,11 @@ def parse_product_page(path):
         if "condition" in v and "price" in v:
             variants.append(v)
     if not variants:
-        return []
+        return None        # 200 but no RSC variant matrix -> treat as a block/failure
 
     model = clean_model(variants[0].get("name", "") or "")
     if not model or not is_phone(model):
-        return []
+        return []          # read OK, just filtered out
 
     # Rating/reviews from the payload's schema aggregateRating.
     rating, review_count = None, None
@@ -250,14 +250,17 @@ def scrape():
         except Exception as e:
             print(f"  ERROR {path}: {str(e)[:80]}")
             log_error(e, site=SITE, path=path)
-            return []
+            return None
 
-    done = 0
+    done = read_ok = 0
     with ThreadPoolExecutor(max_workers=WORKERS) as ex:
         futures = {ex.submit(work, p): p for p in paths}
         for fut in as_completed(futures):
             done += 1
-            for v in (fut.result() or []):
+            res = fut.result()
+            if res is not None:                      # page read OK (offers may be empty)
+                read_ok += 1
+            for v in (res or []):
                 vkey = make_variant_key(v["model"], v["storage"])
                 bkey = (vkey, v["condition"])
                 if better_offer(v["availability"], v["price"], best.get(bkey)):
@@ -295,8 +298,12 @@ def scrape():
         saved += 1
         print(f"  saved: {o['name']:40} [{condition:15}] {o['availability']:12} ₹{o['price']:.0f}")
 
-    # Phones not seen in this run -> out of stock (guarded against partial runs).
-    mark_unseen_out_of_stock(SITE, run_started_at)
+    # Gate the OOS sweep on scraper HEALTH: the fraction of product pages we read
+    # successfully (a block makes pages return no RSC -> read_ok collapses -> skip).
+    ratio = (read_ok / len(paths)) if paths else 0.0
+    run_complete = bool(paths) and ratio >= 0.7
+    print(f"Read OK: {read_ok}/{len(paths)} ({ratio*100:.0f}%) — run_complete={run_complete}")
+    mark_unseen_out_of_stock(SITE, run_started_at, run_complete=run_complete)
 
     print(f"\nDone. Saved {saved} offers from {SITE}.")
 

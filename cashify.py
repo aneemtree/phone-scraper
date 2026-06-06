@@ -200,16 +200,18 @@ def fetch_product_variants(slug):
 
 
 def scrape_product(slug, img_url):
-    """Return (product_url, rows). One row per (condition, storage) at the LOWEST
-    in-stock price across colors, deep-linked to that variant. Out-of-stock
-    variants (availableInventory == 0) are excluded."""
+    """Return (product_url, rows, got_data). One row per (condition, storage) at the
+    LOWEST in-stock price across colors, deep-linked to that variant. Out-of-stock
+    variants (availableInventory == 0) are excluded. got_data=True when the page
+    yielded a parseable variant matrix (a sold-out product still has one) — the
+    scraper-health signal used to gate the OOS sweep."""
     url, variants = fetch_product_variants(slug)
     if not variants:
-        return url, []
+        return url, [], False
 
     model = clean_model(variants[0].get("productName", "") or "")
     if not model or not is_phone(model):
-        return url, []
+        return url, [], True
 
     best = {}  # (condition, storage, ram) -> {price, vid, image, availability}
     for v in variants:
@@ -243,7 +245,7 @@ def scrape_product(slug, img_url):
             "url": f"{url}/{b['vid']}" if b.get("vid") else url,
             "image_url": img_url or b.get("image"),
         })
-    return url, rows
+    return url, rows, True
 
 
 def scrape():
@@ -258,6 +260,7 @@ def scrape():
     print(f"\nTotal products from API: {len(products)}")
 
     best = {}  # (variant_key, condition) -> best offer
+    attempted = with_data = 0
     for idx, prod in enumerate(products, 1):
         slug = prod.get("slug", "")
         if not slug:
@@ -270,13 +273,16 @@ def scrape():
         warranty = warranty[0] if isinstance(warranty, list) else warranty
         warranty_months = int(warranty) if warranty and str(warranty).isdigit() else None
 
+        attempted += 1
         try:
-            _url, rows = scrape_product(slug, img_url)
+            _url, rows, got_data = scrape_product(slug, img_url)
         except Exception as e:
             print(f"  [{idx}/{len(products)}] ERROR {slug}: {str(e)[:80]}")
             log_error(e, site=SITE, slug=slug)
             time.sleep(DELAY)
             continue
+        if got_data:
+            with_data += 1
 
         for r in rows:
             vkey = make_variant_key(r["model"], r["storage"], r["ram"])
@@ -320,8 +326,15 @@ def scrape():
         saved += 1
         print(f"  saved: {o['name']:30} [{cond:12}] {o['availability']:12} ₹{o['price']:.0f}")
 
-    # Phones not seen in this run -> out of stock (guarded against partial runs).
-    mark_unseen_out_of_stock(SITE, run_started_at)
+    # Gate the OOS sweep on scraper HEALTH (did we parse variant data for most
+    # listed products?), not on how many phones happen to be in stock — the
+    # in-stock count legitimately fluctuates with availability. A Cloudflare block
+    # makes pages yield no RSC, collapsing the data-yield ratio and skipping the sweep.
+    data_ratio = (with_data / attempted) if attempted else 0.0
+    run_complete = bool(products) and data_ratio >= 0.7
+    print(f"\nData yield: {with_data}/{attempted} products parsed "
+          f"({data_ratio*100:.0f}%) — run_complete={run_complete}")
+    mark_unseen_out_of_stock(SITE, run_started_at, run_complete=run_complete)
 
     print(f"\nDone. Saved {saved} (variant, condition) offers from {SITE}.")
 

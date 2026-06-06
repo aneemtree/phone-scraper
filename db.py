@@ -151,16 +151,18 @@ def mark_site_oos(site):
     return len(phone_ids)
 
 
-def mark_unseen_out_of_stock(site, run_started_at, min_seen_ratio=0.5):
+def mark_unseen_out_of_stock(site, run_started_at, min_seen_ratio=0.5, run_complete=None):
     """Flag this site's phones that were NOT seen during the run as out of stock.
 
     Call at the END of a scraper, passing the timestamp captured at the START of
     the run. save_phone() stamps last_seen_at=now on every phone it sees, so any
     phone with last_seen_at < run_started_at (or null) wasn't in this run.
 
-    Guard: if fewer than `min_seen_ratio` of the site's phones were seen, the
-    sweep is skipped — so a crashed or partial run can't wipe a whole store to
-    out of stock. Phones found this run are set back in_stock=true by save_phone.
+    Guard: a crashed/blocked run must not wipe a whole store to out of stock.
+    Preferred signal — pass `run_complete` (the scraper's own health check, e.g.
+    "parsed variant data for >=X% of listed products"): True runs the sweep, False
+    skips it. When run_complete is None, fall back to the legacy `min_seen_ratio`
+    count guard (fine for stores where a run reliably re-sees most rows).
     """
     total = (_exec(lambda: supabase.table("phones").select("id", count="exact")
              .eq("site", site).execute()).count or 0)
@@ -168,8 +170,12 @@ def mark_unseen_out_of_stock(site, run_started_at, min_seen_ratio=0.5):
         return 0
     seen = (_exec(lambda: supabase.table("phones").select("id", count="exact")
             .eq("site", site).gte("last_seen_at", run_started_at).execute()).count or 0)
-    if seen < max(1, int(total * min_seen_ratio)):
-        print(f"  [oos] {site}: only {seen}/{total} phones seen this run — skipping OOS sweep (guard)")
+    if run_complete is None:
+        if seen < max(1, int(total * min_seen_ratio)):
+            print(f"  [oos] {site}: only {seen}/{total} phones seen this run — skipping OOS sweep (guard)")
+            return 0
+    elif not run_complete:
+        print(f"  [oos] {site}: run reported incomplete (scraper health) — skipping OOS sweep")
         return 0
     # Not seen this run -> out of stock (older last_seen_at, or never stamped).
     _exec(lambda: supabase.table("phones").update({"in_stock": False}).eq("site", site).lt("last_seen_at", run_started_at).execute())

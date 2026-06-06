@@ -92,6 +92,15 @@ If two stores produce different variant_keys for the same physical phone
 (normalization didn't catch it), set canonical_key on both phones rows in
 Supabase to the same value. The offers view uses coalesce(canonical_key, variant_key).
 
+### Name aliases (model_aliases)
+A `model_aliases` table (model = canonical, alt_name_1/alt_name_2 = variations)
+drives manual name matching in three places: normalize_db.py Pass 1 rewrites any
+phone whose cleaned model equals an alias to the canonical (so store variations like
+"iPhone SE 2" / "iPhone SE 2nd Gen" / "iPhone SE 2020" share one variant_key = one
+combined card), and gsmarena.py + beebom.py try the model name AND its aliases when
+matching the external source (load_aliases()/match_with_aliases). Keyed by the exact
+model string, case-insensitive. Schema in specs_schema.sql.
+
 ### Image hosting (Cloudflare R2)
 Images are ONE canonical image per MODEL. The offers view serves
 `coalesce(specs.image_url, specs.image_fallback)`: PRIMARY = Beebom (beebom.py;

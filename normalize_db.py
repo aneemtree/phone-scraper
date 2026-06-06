@@ -67,15 +67,40 @@ def pass0_delete_nonphones(phones):
     return deleted
 
 
+def load_alias_map():
+    """{cleaned alias name (lower) -> cleaned canonical model} from model_aliases.
+    Lets store name variations (e.g. 'iPhone SE 2' / 'SE 2nd Gen' / 'SE 2020')
+    collapse to one canonical model, so they share a variant_key (one card)."""
+    rev = {}
+    try:
+        rows = sb.table("model_aliases").select("model,alt_name_1,alt_name_2").execute().data or []
+    except Exception as e:
+        print(f"  (model_aliases not available: {e})")
+        return rev
+    for r in rows:
+        canon = clean_model(r.get("model") or "")
+        if not canon:
+            continue
+        for alt in (r.get("alt_name_1"), r.get("alt_name_2")):
+            if alt:
+                rev[clean_model(alt).lower()] = canon
+    return rev
+
+
 def pass1_renormalize(phones):
-    """Recompute model + variant_key for every row from its raw name."""
+    """Recompute model + variant_key for every row from its raw name, applying the
+    model_aliases canonical-name overrides."""
     print("\n── Pass 1: re-normalizing model names + keys ──")
+    rev = load_alias_map()
+    if rev:
+        print(f"  loaded {len(rev)} alias -> canonical mappings")
     updated = 0
     for p in phones:
         raw = p.get("name") or p.get("model") or ""
         new_model = clean_model(raw)
         if not new_model:
             continue
+        new_model = rev.get(new_model.lower(), new_model)   # alias override
         new_key = make_variant_key(new_model, p.get("storage"), p.get("ram"))
         patch = {}
         if new_model != p.get("model"):

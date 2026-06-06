@@ -185,14 +185,16 @@ def mark_unseen_out_of_stock(site, run_started_at, min_seen_ratio=0.5):
 
 
 def _mark_disappeared_conditions_oos(site, run_started_at):
-    """For phones SEEN this run, mark any condition NOT refreshed this run as
-    out of stock by appending an out_of_stock price snapshot (copying the last
-    known price/url). latest_prices then surfaces out_of_stock for that grade,
-    so a sold-out condition stops showing as in stock while its sibling grades
-    stay available. Idempotent: skips conditions whose latest row is already OOS.
+    """For ALL the site's phones, mark any (phone, condition) whose latest price is
+    in_stock but was NOT refreshed this run as out of stock (append an out_of_stock
+    snapshot copying the last price/url). Covers both a SEEN phone whose grade sold
+    out AND a fully-UNSEEN phone (none of its grades refreshed) — so
+    latest_prices.availability stays consistent with the phones.in_stock flag rather
+    than showing a stale in_stock for a sold-out phone. Idempotent: skips conditions
+    whose latest row is already OOS.
     """
     seen = (_exec(lambda: supabase.table("phones").select("id")
-            .eq("site", site).gte("last_seen_at", run_started_at).execute()).data or [])
+            .eq("site", site).execute()).data or [])
     seen_ids = [p["id"] for p in seen]
     inserted = 0
     for i in range(0, len(seen_ids), 50):

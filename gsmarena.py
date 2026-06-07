@@ -53,6 +53,12 @@ _CTX.verify_mode = ssl.CERT_NONE
 # Tokens that don't help identify a model (connectivity/marketing/packaging noise).
 _STOP = set("5g 4g 3g 2g lte volte nfc android smartphone phone with dual sim "
             "esim e-sim physical new moto".split())
+# Variant-line words: if a candidate device has one of these that our model lacks,
+# it's a different phone (Redmi 4 vs Redmi Turbo 4, S24 vs S24 FE), so reject the
+# match. Numeric/brand-prefix extras (iPhone 17 Air, Xiaomi Poco F6) stay allowed.
+_VARIANT_QUALIFIERS = set(
+    "pro max ultra plus lite neo turbo prime power ace fold flip edge active mini "
+    "fe note master racing explorer champion speed".split())
 # "moto" is dropped so GSMArena's "Motorola Moto G54" still subset-matches our
 # "Motorola G54" (clean_model now collapses Moto into Motorola); the device's stray
 # "moto" token is simply ignored on both sides.
@@ -146,7 +152,13 @@ def best_match(model, devices):
             continue
         if not ours_set <= alias:         # all our tokens must be present
             continue
-        extra = len(device_name_tokens(d) - ours_set)
+        extra_tokens = device_name_tokens(d) - ours_set
+        # A variant-line word the device has but our model lacks means it's a
+        # DIFFERENT phone (e.g. "Redmi 4" vs "Redmi Turbo 4", "S24" vs "S24 FE") —
+        # never the same device. Reject, unlike numeric/brand-prefix extras.
+        if extra_tokens & _VARIANT_QUALIFIERS:
+            continue
+        extra = len(extra_tokens)
         if extra < best_extra:
             best, best_extra = d, extra
             if extra == 0:

@@ -163,6 +163,13 @@ gsmarena.py to populate → then apply the offers view (so cards aren't blank).
 After adding a new store, add a row to the stores table:
   insert into stores (site, display_name, website_url) values ('newsite', 'New Site', 'https://...');
 Upload the store logo to Supabase Storage "logos" bucket and update logo_url.
+Store LOGOS are hosted on Cloudflare R2 (path `logos/<file>`) so the web app
+serves them optimised via Cloudflare image transformations (imageUrl(): resized,
+WebP/AVIF, edge-cached). `migrate_logos_to_r2.py` moves existing Supabase-bucket
+logos to R2 and rewrites stores.logo_url (re-runnable; `--dry` to preview). For a
+NEW store: upload the logo to the `logos` bucket, set logo_url, then run
+`python3 migrate_logos_to_r2.py` to push it to R2. SVG logos are copied but the
+frontend serves them untransformed (Cloudflare's resizer skips vector).
 
 ### Scrapers & pipeline
 Active scrapers: cashify, controlz, refit, xtracover, ovantica, mobilegoo,

@@ -309,7 +309,12 @@ share the Cashify vocab. maplestore maps its page grade "Almost New" to "Like Ne
 
 Workflows (GitHub Actions):
   - scrape.yml — full run, `schedule` only (6 AM & 3 PM IST) + workflow_dispatch.
-    It does NOT run on push/merge. Runs all scrapers, then normalize_db.py.
+    It does NOT run on push/merge. TWO parallel jobs: `requests-scrapers` (the
+    requests-only sites, no browser install) and `browser-scrapers` (the 4
+    Playwright ones: controlz, cashify, xtracover, ovantica, with the browser
+    cached); a `normalize` job (needs both, `if: !cancelled()`) runs normalize_db.py
+    after. pip is cached (setup-python cache: pip) and the Playwright browser via
+    actions/cache, so installs are fast. Common env (secrets) is workflow-level.
   - scrape-one.yml — manual single-site chooser (workflow_dispatch) for testing
     one scraper. Does NOT run normalize_db.
   - scrape-catalog.yml — MONTHLY (1st, 01:00 UTC) + dispatch. Runs the 15 JSON/RSC

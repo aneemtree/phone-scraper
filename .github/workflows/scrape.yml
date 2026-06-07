@@ -10,159 +10,110 @@ on:
 permissions:
   contents: read
 
-jobs:
-  scrape:
-    runs-on: ubuntu-latest
-    # Optional Sentry error logging — inherited by every step. No-op if the
-    # SENTRY_DSN secret isn't set.
-    env:
-      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      R2_BUCKET: ${{ secrets.R2_BUCKET }}
-      R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v4
+# Shared with every job. Secrets are allowed in workflow-level env.
+env:
+  SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+  R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+  R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  R2_BUCKET: ${{ secrets.R2_BUCKET }}
+  R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+jobs:
+  # Requests-only scrapers — no browser, so no Playwright install (fast).
+  requests-scrapers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Install Playwright browser
-        run: python -m playwright install --with-deps chromium
-
-      # Each scraper runs independently: `if: ${{ !cancelled() }}` lets the
-      # remaining stores (and normalize) still run if one scraper fails, instead
-      # of the first failure skipping everything after it. The job still reports
-      # failure (Sentry/visibility intact) when any step errors.
-      - name: Run ControlZ scraper
+          cache: pip
+      - run: pip install -r requirements.txt
+      # `if: ${{ !cancelled() }}` so one scraper failing doesn't skip the rest.
+      - name: Refit
         if: ${{ !cancelled() }}
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: python controlz.py
-
-      - name: Run Cashify scraper
-        if: ${{ !cancelled() }}
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: python cashify.py
-
-      - name: Run Refit scraper
-        if: ${{ !cancelled() }}
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python refit.py
-
-      - name: Run Xtracover scraper
+      - name: Mobilegoo
         if: ${{ !cancelled() }}
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: python xtracover.py
-
-      - name: Run Ovantica scraper
-        if: ${{ !cancelled() }}
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: python ovantica.py
-
-      - name: Run Mobilegoo scraper
-        if: ${{ !cancelled() }}
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python mobilegoo.py
-
-      - name: Run Sahivalue scraper
+      - name: Sahivalue
         if: ${{ !cancelled() }}
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python sahivalue.py
-
-      - name: Run OldSold scraper
+      - name: OldSold
         if: ${{ !cancelled() }}
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python oldsold.py
-
-      - name: Run ThePhoneHub scraper
+      - name: ThePhoneHub
         if: ${{ !cancelled() }}
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python thephonehub.py
-
-      - name: Run EasyPhones scraper
+      - name: EasyPhones
         if: ${{ !cancelled() }}
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python easyphones.py
-
-      - name: Run Tetro scraper
+      - name: Tetro
         if: ${{ !cancelled() }}
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python tetro.py
-
-      - name: Run Grest scraper
+      - name: Grest
         if: ${{ !cancelled() }}
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python grest.py
-
-      - name: Run CellBuddy scraper
+      - name: CellBuddy
         if: ${{ !cancelled() }}
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python cellbuddy.py
-
-      - name: Run Budli scraper
+      - name: Budli
         if: ${{ !cancelled() }}
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python budli.py
-
-      - name: Run iTradeit scraper
+      - name: iTradeit
         if: ${{ !cancelled() }}
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python itradeit.py
-
-      - name: Run Gadget Rebirth scraper
+      - name: Gadget Rebirth
         if: ${{ !cancelled() }}
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python gadgetrebirth.py
-
-      - name: Run Maple Store scraper
+      - name: Maple Store
         if: ${{ !cancelled() }}
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python maplestore.py
 
-      - name: Normalize (clean names + recompute keys)
+  # Playwright scrapers — install the browser (cached) only here.
+  browser-scrapers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Cache Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+      - run: python -m playwright install --with-deps chromium
+      - name: ControlZ
         if: ${{ !cancelled() }}
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python controlz.py
+      - name: Cashify
+        if: ${{ !cancelled() }}
+        run: python cashify.py
+      - name: Xtracover
+        if: ${{ !cancelled() }}
+        run: python xtracover.py
+      - name: Ovantica
+        if: ${{ !cancelled() }}
+        run: python ovantica.py
+
+  # Runs after BOTH scraper jobs; `if: !cancelled()` so a scraper failure
+  # doesn't skip the normalize pass.
+  normalize:
+    needs: [requests-scrapers, browser-scrapers]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Normalize (clean names + recompute keys)
         run: python normalize_db.py

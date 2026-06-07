@@ -61,6 +61,7 @@ def fetch_listing(category_id):
                f"?category={category_id}&per_page=100&page={page}")
         r = requests.get(url, headers=HEADERS, timeout=30)
         if r.status_code != 200:
+            print(f"  listing HTTP {r.status_code} at page {page}: {r.text[:150]!r}")
             break
         batch = r.json()
         if not batch:

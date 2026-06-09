@@ -118,6 +118,10 @@ def scrape():
         if not INCLUDE_OOS and not any(v.get("available", False) for v in variants):
             continue
 
+        # No reviews captured: EasyPhones' Loox widget injects a STORE-WIDE
+        # aggregateRating (same 4.3/118 on different phones), not per-product
+        # reviews — so it isn't genuine per-phone data.
+
         # Resolve option slots by NAME (order/spelling varies per product).
         opt_idx = shopify_option_index(prod)
         grade_pos = opt_idx.get("grade")

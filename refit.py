@@ -24,6 +24,7 @@ import time
 import requests
 from normalize import clean_model, normalize_storage, make_variant_key, parse_size_string, normalize_condition, is_phone, shopify_option_index
 from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer, months_to_days
+from reviews import fetch_aggregate_rating
 from obs import init_sentry, log_error
 
 SITE = "refit"
@@ -33,6 +34,7 @@ DELAY = 0.5
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 HEADERS = {"User-Agent": UA}
+SESSION = requests.Session(); SESSION.headers.update(HEADERS)
 
 
 def fetch_all_products():
@@ -114,18 +116,21 @@ def scrape():
         # "Good"/"Superb".
         is_brand_box = bool(re.search(r"brand\s*box", title, re.I))
 
-        # Get rating from Judge.me embedded data — not available in products.json
-        # Refit uses Judge.me; rating shown in listing HTML but not in API.
-        # We'll skip rating for now and leave as None.
-        rating = None
-        review_count = None
-
         variants = prod.get("variants", [])
         if not variants:
             continue
         # Skip fully-out-of-stock products UNLESS the monthly OOS catalog pass is on.
         if not INCLUDE_OOS and not any(v.get("available", False) for v in variants):
             continue
+
+        # Per-product rating from the product page (Judge.me injects a schema.org
+        # aggregateRating). products.json doesn't carry it, so fetch the page once
+        # per product — but only for products with an in-stock variant (the ones
+        # that display), so the OOS catalog pass doesn't fetch thousands of pages.
+        if any(v.get("available", False) for v in variants):
+            rating, review_count = fetch_aggregate_rating(url, SESSION)
+        else:
+            rating, review_count = None, None
 
         # Resolve which option slot holds grade vs size by NAME (positions vary
         # per store/product). Fall back to Refit's usual layout (grade=option1,

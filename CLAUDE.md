@@ -95,6 +95,41 @@ MONTH_DAYS(30)/YEAR_DAYS(365) keep the conversion consistent across scrapers.
   - `probe_warranty.py` is the read-only one-off that maps where each store
     exposes warranty (re-run it before extending coverage to a new store).
 
+### Reviews / ratings (prices.rating + review_count)
+Only GENUINE per-product reviews are stored (reviews OF that phone) — never a
+store-wide score repeated on every product (that's what the trust_score is for).
+save_price(rating=, review_count=); both set together, left null when a product
+has no real reviews (count must be > 0). Per-store source:
+  - cashify: `ar`/`tr` in the RSC payload (per product). Up to ~4600 reviews.
+  - controlz: scraped from the rendered "4.7 · 21 REVIEWS" header text.
+  - ovantica: JSON-LD ratingValue/reviewCount (sparse; some look store-wide).
+  - itradeit: WooCommerce Store API products carry native `average_rating` +
+    `review_count` — free, already in the listing payload (~half its products
+    have a few reviews each). thephonehub/cellbuddy expose the same fields but
+    have NO reviews enabled (0), so nothing is stored.
+  - refit (Judge.me): products.json has no reviews, so the scraper fetches the
+    PRODUCT PAGE once per in-stock product and reads Judge.me's schema.org
+    `aggregateRating` (reviews.py fetch_aggregate_rating). Verified per-product
+    (e.g. iPhone 12=4.38/133, 13=4.72/350, 14=4.53/120). Only in-stock products
+    are fetched (the OOS catalog pass skips them, so it doesn't pull thousands of
+    pages).
+  - NOT captured:
+    - easyphones: its Loox widget serves a STORE-WIDE aggregateRating (the same
+      4.3/118 appears on different phones), not per-product reviews — so it's
+      excluded despite being fetchable.
+    - gadgetrebirth exposes `rating`/`reviews` in its API for free, but the
+      figures (uniform 4.8–4.9★, hundreds–thousands per product on a small store)
+      read as inflated marketing social-proof, so they are deliberately NOT stored.
+    - tetro/maplestore/mobilegoo/sahivalue have no reviews; thephonehub/cellbuddy
+      have the Woo rating fields but 0 reviews; oldsold/grest had none on their
+      product pages; budli shows a STORE-WIDE 3.7/1377 repeated on every phone
+      (not per-product), so it's excluded too.
+  - reviews.py — fetch_aggregate_rating(url, session) → (rating, count) from a
+    product page's JSON-LD aggregateRating (Judge.me/Loox/Yotpo/...); (None,None)
+    unless both a rating and a non-zero count are present.
+  - `probe_reviews.py` is the read-only one-off that maps where each store
+    exposes reviews (re-run it before extending coverage to a new store).
+
 ### Normalization (normalize.py)
 All scrapers must pass model names through clean_model() and storage through
 normalize_storage() before calling make_variant_key(). Never save raw names.

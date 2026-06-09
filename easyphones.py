@@ -29,6 +29,7 @@ import time
 import requests
 from normalize import clean_model, make_variant_key, parse_size_string, normalize_condition, is_phone, shopify_option_index
 from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer, months_to_days
+from reviews import fetch_aggregate_rating
 from obs import init_sentry, log_error
 
 SITE = "easyphones"
@@ -38,6 +39,7 @@ DELAY = 0.4
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 HEADERS = {"User-Agent": UA}
+SESSION = requests.Session(); SESSION.headers.update(HEADERS)
 
 
 def clean_grade(raw):
@@ -118,6 +120,14 @@ def scrape():
         if not INCLUDE_OOS and not any(v.get("available", False) for v in variants):
             continue
 
+        # Per-product rating from the product page (EasyPhones uses Loox, which
+        # injects a schema.org aggregateRating). Fetch once per product, only for
+        # products with an in-stock variant (the ones that display).
+        if any(v.get("available", False) for v in variants):
+            rating, review_count = fetch_aggregate_rating(url, SESSION)
+        else:
+            rating, review_count = None, None
+
         # Resolve option slots by NAME (order/spelling varies per product).
         opt_idx = shopify_option_index(prod)
         grade_pos = opt_idx.get("grade")
@@ -164,6 +174,7 @@ def scrape():
                     "price": lowest_price, "availability": availability,
                     "url": variant_url, "image_url": img_url,
                     "warranty_days": months_to_days(warranty_months),
+                    "rating": rating, "review_count": review_count,
                     "name": f"{model} {storage or ''}".strip(),
                 }
 
@@ -187,6 +198,7 @@ def scrape():
         save_price(
             pid, o["price"], availability=o["availability"],
             condition=grade, warranty_days=o.get("warranty_days"), url=o["url"],
+            rating=o.get("rating"), review_count=o.get("review_count"),
         )
         saved += 1
         print(f"  saved: {o['name']:35} [{grade:12}] {o['availability']:12} ₹{o['price']:.0f}")

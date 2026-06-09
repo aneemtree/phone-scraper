@@ -205,6 +205,13 @@ def scrape():
             prod_img = _img(images[0].get("src")) if images else None
             smap = storage_map(prod)
 
+            # WooCommerce Store API carries native, per-product review data.
+            # Only keep it when there are real reviews (count > 0).
+            rating = float(prod.get("average_rating") or 0) or None
+            review_count = int(prod.get("review_count") or 0) or None
+            if not review_count:
+                rating = None
+
             for v in variations_for(prod, smap):
                 if not v["in_stock"] and not INCLUDE_OOS:
                     continue
@@ -227,6 +234,7 @@ def scrape():
                     "variant_key": vkey, "condition": condition,
                     "price": price, "availability": availability,
                     "url": url, "image_url": v.get("image_url") or prod_img,
+                    "rating": rating, "review_count": review_count,
                     "name": (f"{model} {ram}/{storage}" if ram and storage
                              else f"{model} {storage}").strip(),
                 }
@@ -251,6 +259,7 @@ def scrape():
         save_price(
             pid, o["price"], availability=o["availability"],
             condition=o["condition"], url=o["url"],
+            rating=o.get("rating"), review_count=o.get("review_count"),
         )
         saved += 1
         print(f"  saved: {o['name']:42} [{o['condition']:18}] ₹{o['price']:.0f}  [{o['availability']}]")

@@ -50,6 +50,9 @@ create index if not exists specs_status_idx on specs (status);
 create index if not exists specs_model_lower_idx on specs (lower(model));
 
 -- ---------------------------------------------------------------------------
+-- NOTE: offers reads lp.warranty_label from latest_prices (added by the
+-- add_warranty_label migration). latest_prices is maintained in-DB, not here;
+-- it must expose warranty_months + warranty_label for this view to build.
 -- offers view: specs and the canonical image are per-MODEL, so every storage
 -- variant of a phone shares one spec sheet/image. The lateral picks the best
 -- specs row for the model (prefer one with specs, then with an image).
@@ -61,7 +64,7 @@ create view offers as
     ph.model, ph.storage, ph.ram, ph.site, ph.name, ph.url,
     coalesce(sp.image_url, sp.image_fallback) as image_url,   -- Beebom primary, GSMArena fallback
     lp.price, lp.availability, lp.condition, lp.rating, lp.review_count,
-    lp.warranty_months, lp.url as condition_url,
+    lp.warranty_months, lp.warranty_label, lp.url as condition_url,
     s.display_name as store_name, s.logo_url, s.default_warranty_months, s.trust_score,
     ph.in_stock, ph.last_seen_at,
     sp.specs                as specs,

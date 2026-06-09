@@ -48,27 +48,38 @@ Two implementation styles:
     color, price, availability flag, and the per-variant id — no clicking. This
     is faster and more reliable; prefer it when the payload is complete.
 
-### Warranty (prices.warranty_months / stores.default_warranty_months)
-Two ways warranty reaches the offers view (`lp.warranty_months` per-offer,
-`s.default_warranty_months` store-level fallback). Capture it per-offer when the
-source varies it per listing; otherwise set a single store default in the
-`stores` table (no scrape needed — takes effect immediately).
-  - PER-OFFER (scraper writes `warranty_months` into save_price):
-    - cashify: `warranty_duration` in the RSC payload (6/12).
-    - refit: from product tags / body_html ("N month warranty"), else 12.
-    - easyphones: body_html, else 6 (the store's advertised warranty).
-    - tetro: from tags ("N month Warranty"); the per-variant "Warranty Info"
-      option ("12m Tetro Warranty", "1-6m/6-12m Apple Warranty") is not yet read.
-    - mobilegoo: parse_warranty() pulls months from the grade label's
-      parenthetical ("Good (3 Months Seller Warranty)" → 3); ranges
-      ("9 to 12 Months Brand Warranty") take the LOWER bound; a days-only
-      "7 Day Checking Warranty" → 0.
-    - oldsold: parse_warranty() reads the "Warranty" variant option
-      ("7 Days"→0, "1 Month"→1, "6 Months"→6, "1 Year"→12).
-    - budli: warranty_from_body() parses the body ("6 months / 1 year Budli
-      service warranty", "No warranty"→0, "Brand warranty till <date>"→None).
-    - gadgetrebirth: product-level `warrantyMonths` field (0/1; the "15-days"
-      `warrantyOption` is 0 → stored as None).
+### Warranty (prices.warranty_months + warranty_label / stores.default_warranty_months)
+Warranty reaches the offers view three ways: `lp.warranty_months` (per-offer,
+whole-month seller/store warranty — the COMPARABLE number), `lp.warranty_label`
+(per-offer TEXT display override for cases that aren't whole months), and
+`s.default_warranty_months` (store-level fallback). Display precedence (for the
+future UI): warranty_label → "{warranty_months} months" → store default.
+  - WHY warranty_label exists: a months-only int couldn't represent the
+    sub-month "7 Day Checking" / "15-days" warranties (they're not 0 months) or
+    manufacturer warranties. Per the product owner: a days-only warranty shows as
+    "N-day warranty", and ANY manufacturer/Apple/Samsung/brand warranty shows as
+    "Brand Warranty" (its remaining duration isn't a seller-backed promise, so we
+    don't try to put a month number on it). save_price(warranty_months=,
+    warranty_label=) — set ONE of them; label wins when both are null-able.
+  - PER-OFFER (scraper computes both and passes to save_price):
+    - cashify: `warranty_duration` in the RSC payload (6/12) → months.
+    - refit: from product tags / body_html ("N month warranty"), else 12 → months.
+    - easyphones: body_html, else 6 (the store's advertised warranty) → months.
+    - tetro: from tags ("N month Warranty") → months; the per-variant "Warranty
+      Info" option ("12m Tetro / 1-6m·6-12m Apple Warranty") is not yet read.
+    - mobilegoo: parse_warranty() → (months, label) from the grade label's
+      parenthetical. "Good (3 Months Seller Warranty)"→(3,None); a seller-warranty
+      range takes the LOWER bound; "7 Day Checking Warranty"→(None,"7-day
+      warranty"); "9 to 12 Months Brand/Apple/Samsung Warranty"→(None,"Brand
+      Warranty").
+    - oldsold: parse_warranty() reads the "Warranty" variant option → "1 Month"
+      →(1,None), "6 Months"→(6,None), "1 Year"→(12,None), "7 Days"→(None,"7-day
+      warranty").
+    - budli: warranty_from_body() → "6 months/1 year Budli service warranty"
+      →(N,None); "Brand warranty till <date>"→(None,"Brand Warranty"); "No
+      warranty"→(0,None).
+    - gadgetrebirth: product `warrantyMonths` (>0 → months); the "15-days"
+      `warrantyOption` (warrantyMonths 0) → (None,"15-day warranty").
   - STORE-LEVEL DEFAULT (`stores.default_warranty_months`, set via SQL — these
     stores advertise ONE blanket warranty for all listings, so it lives on the
     store row, not per offer): controlz=18, grest=6, thephonehub=6, easyphones=6
@@ -76,6 +87,8 @@ source varies it per listing; otherwise set a single store default in the
   - NOT captured yet: maplestore (no warranty stated), sahivalue (brand-warranty
     text only, no clear duration), itradeit/xtracover/controlz per-offer (mixed
     brand/store warranties — open-box "With Apple Warranty" has no fixed months).
+  - SCHEMA: prices.warranty_label text (add_warranty_label migration);
+    latest_prices + offers expose warranty_months + warranty_label.
   - `probe_warranty.py` is the read-only one-off that maps where each store
     exposes warranty (re-run it before extending coverage to a new store).
 

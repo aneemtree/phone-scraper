@@ -48,25 +48,34 @@ def parse_condition(raw):
 
 
 def parse_warranty(raw):
-    """Months of warranty from the grade label's parenthetical, e.g.
-    "Good (3 Months Seller Warranty)" → 3, "Superb (1 Month ...)" → 1.
-    Ranges ("Superb (9 to 12 Months Brand Warranty)") take the lower (minimum
-    guaranteed) bound; a days-only checking warranty ("7 Day Checking
-    Warranty") → 0; None when no warranty is stated."""
+    """Return (warranty_months, warranty_label) from the grade label's
+    parenthetical:
+      "Good (3 Months Seller Warranty)"          → (3, None)
+      "Good (7 Day Checking Warranty)"            → (None, "7-day warranty")
+      "Superb (9 to 12 Months Brand Warranty)"   → (None, "Brand Warranty")
+      "Superb (3 to 6 Months Apple Warranty)"    → (None, "Brand Warranty")
+    A manufacturer/Apple/Samsung warranty is shown as "Brand Warranty" (per
+    product owner, regardless of stated months). A seller/service warranty with
+    a month duration gives months (ranges take the lower bound). A days-only
+    checking warranty gives an "N-day warranty" label. (None, None) if absent."""
     if not raw:
-        return None
+        return None, None
     s = str(raw).lower()
     if "warrant" not in s:
-        return None
+        return None, None
+    seller = re.search(r"seller|service|store", s)
+    if not seller and re.search(r"brand|apple|samsung|manufacturer", s):
+        return None, "Brand Warranty"
     rng = re.search(r"(\d+)\s*to\s*(\d+)\s*month", s)
     if rng:
-        return int(rng.group(1))
+        return int(rng.group(1)), None
     m = re.search(r"(\d+)\s*month", s)
     if m:
-        return int(m.group(1))
-    if re.search(r"\d+\s*day", s):
-        return 0
-    return None
+        return int(m.group(1)), None
+    d = re.search(r"(\d+)\s*day", s)
+    if d:
+        return None, f"{int(d.group(1))}-day warranty"
+    return None, None
 
 
 def fetch_collection(collection):
@@ -144,7 +153,7 @@ def scrape():
                     storage = normalize_storage(storage_raw)
 
                 condition = parse_condition(condition_raw)
-                warranty_months = parse_warranty(condition_raw)
+                warranty_months, warranty_label = parse_warranty(condition_raw)
                 variant_id = v.get("id", "")
                 variant_url = f"{prod_url}?variant={variant_id}" if variant_id else prod_url
 
@@ -168,6 +177,7 @@ def scrape():
                         "price": price, "availability": availability,
                         "url": variant_url, "image_url": img_url,
                         "warranty_months": warranty_months,
+                        "warranty_label": warranty_label,
                         "name": f"{model} {storage or ''}".strip(),
                     }
 
@@ -192,7 +202,8 @@ def scrape():
         save_price(
             pid, o["price"], availability=o["availability"],
             condition=condition, rating=None, review_count=None,
-            warranty_months=o.get("warranty_months"), url=o["url"],
+            warranty_months=o.get("warranty_months"),
+            warranty_label=o.get("warranty_label"), url=o["url"],
         )
         saved += 1
         print(f"  saved: {o['name']:40} [{condition:15}] {o['availability']:12} ₹{o['price']:.0f}")

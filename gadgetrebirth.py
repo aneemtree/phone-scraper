@@ -146,10 +146,16 @@ def build_offers(products, include_oos=False):
             continue
         url = f"{BASE_URL}/product/{prod.get('sku', '')}/"
         img_url = get_image(prod)
-        # Product-level warranty (the API also carries a `warrantyOption` like
-        # "15-days"; warrantyMonths is 0 for those sub-month options).
+        # Product-level warranty: `warrantyMonths` (whole months) plus a
+        # `warrantyOption` like "15-days" (warrantyMonths is 0 for those). A
+        # sub-month option becomes an "N-day warranty" display label.
         wm = prod.get("warrantyMonths")
         warranty_months = int(wm) if isinstance(wm, (int, float)) and int(wm) > 0 else None
+        warranty_label = None
+        if warranty_months is None:
+            wd = re.search(r"(\d+)\s*-?\s*day", str(prod.get("warrantyOption") or ""), re.I)
+            if wd:
+                warranty_label = f"{int(wd.group(1))}-day warranty"
 
         variants = prod.get("variants") or []
         groups = {}  # (condition, storage) -> {"in": [prices], "oos": [prices]}
@@ -181,6 +187,7 @@ def build_offers(products, include_oos=False):
                     "condition": cond, "price": price, "availability": availability,
                     "url": url, "image_url": img_url,
                     "warranty_months": warranty_months,
+                    "warranty_label": warranty_label,
                     "name": f"{model} {storage}".strip(),
                 }
     return best
@@ -215,7 +222,7 @@ def scrape():
         )
         save_price(pid, o["price"], availability=o["availability"],
                    condition=cond, warranty_months=o.get("warranty_months"),
-                   url=o["url"])
+                   warranty_label=o.get("warranty_label"), url=o["url"])
         saved += 1
         print(f"  saved: {o['name']:32} [{cond:10}] {o['availability']:12} ₹{o['price']:.0f}")
 

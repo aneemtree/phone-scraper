@@ -118,12 +118,19 @@ def save_phone(site, name, url, image_url, model, storage, ram, variant_key, in_
 
 
 def save_price(phone_id, price, availability="in_stock", condition="Premium Renewed",
-               rating=None, review_count=None, warranty_months=None, url=None):
-    """Append a price snapshot (one per condition). Never overwrites; history accrues."""
+               rating=None, review_count=None, warranty_months=None, url=None,
+               warranty_label=None):
+    """Append a price snapshot (one per condition). Never overwrites; history accrues.
+
+    warranty_months: whole-month seller/store warranty (the comparable number).
+    warranty_label: human display override for cases that aren't whole months —
+      "Brand Warranty" (manufacturer/Apple/Samsung warranties) or "7-day warranty"
+      (days-only). Leave null when warranty_months says it all."""
     _exec(lambda: supabase.table("prices").insert({
         "phone_id": phone_id, "price": price, "availability": availability,
         "condition": condition, "rating": rating, "review_count": review_count,
-        "warranty_months": warranty_months, "url": url,
+        "warranty_months": warranty_months, "warranty_label": warranty_label,
+        "url": url,
     }).execute())
     _note_op(1)
 

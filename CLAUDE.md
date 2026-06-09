@@ -120,8 +120,10 @@ has no real reviews (count must be > 0). Per-store source:
     - gadgetrebirth exposes `rating`/`reviews` in its API for free, but the
       figures (uniform 4.8–4.9★, hundreds–thousands per product on a small store)
       read as inflated marketing social-proof, so they are deliberately NOT stored.
-    - tetro/maplestore/mobilegoo/sahivalue have no reviews; grest/budli/oldsold
-      had none/partial on sampling.
+    - tetro/maplestore/mobilegoo/sahivalue have no reviews; thephonehub/cellbuddy
+      have the Woo rating fields but 0 reviews; oldsold/grest had none on their
+      product pages; budli shows a STORE-WIDE 3.7/1377 repeated on every phone
+      (not per-product), so it's excluded too.
   - reviews.py — fetch_aggregate_rating(url, session) → (rating, count) from a
     product page's JSON-LD aggregateRating (Judge.me/Loox/Yotpo/...); (None,None)
     unless both a rating and a non-zero count are present.

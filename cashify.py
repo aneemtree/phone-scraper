@@ -26,7 +26,7 @@ import time
 import requests
 from playwright.sync_api import sync_playwright
 from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone, parse_size_string
-from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer
+from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer, months_to_days
 from obs import init_sentry, log_error
 
 SITE = "cashify"
@@ -287,7 +287,7 @@ def scrape():
                 "price": r["price"], "availability": r["availability"],
                 "url": r["url"], "image_url": r["image_url"],
                 "rating": rating, "review_count": review_count,
-                "warranty_months": warranty_months,
+                "warranty_days": months_to_days(warranty_months),
                 "name": f"{r['model']} {r['storage'] or ''}".strip(),
             }
             if better_offer(r["availability"], r["price"], best.get(key)):
@@ -315,7 +315,7 @@ def scrape():
             pid, o["price"], availability=o["availability"],
             condition=o["condition"], rating=o.get("rating"),
             review_count=o.get("review_count"),
-            warranty_months=o.get("warranty_months"), url=o["url"],
+            warranty_days=o.get("warranty_days"), url=o["url"],
         )
         saved += 1
         print(f"  saved: {o['name']:30} [{cond:12}] {o['availability']:12} ₹{o['price']:.0f}")

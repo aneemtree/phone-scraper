@@ -15,6 +15,18 @@ load_dotenv()
 def _utcnow_iso():
     return datetime.now(timezone.utc).isoformat()
 
+
+# Warranty is stored in DAYS (the canonical comparable unit). Sources that quote
+# whole months/years are converted with this fixed convention (1 month = 30 days,
+# 1 year = 365 days); the UI divides back by 30 for the month display.
+MONTH_DAYS = 30
+YEAR_DAYS = 365
+
+
+def months_to_days(months):
+    """Convert a whole-month warranty to days (None-safe)."""
+    return int(months) * MONTH_DAYS if months is not None else None
+
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 
@@ -118,18 +130,20 @@ def save_phone(site, name, url, image_url, model, storage, ram, variant_key, in_
 
 
 def save_price(phone_id, price, availability="in_stock", condition="Premium Renewed",
-               rating=None, review_count=None, warranty_months=None, url=None,
+               rating=None, review_count=None, warranty_days=None, url=None,
                warranty_label=None):
     """Append a price snapshot (one per condition). Never overwrites; history accrues.
 
-    warranty_months: whole-month seller/store warranty (the comparable number).
-    warranty_label: human display override for cases that aren't whole months —
-      "Brand Warranty" (manufacturer/Apple/Samsung warranties) or "7-day warranty"
-      (days-only). Leave null when warranty_months says it all."""
+    warranty_days: warranty duration in DAYS (the canonical, comparable unit —
+      a month is stored as 30 days, a year as 365). The UI converts back to
+      months for display and keeps days only when below a month. See CLAUDE.md.
+    warranty_label: text override for warranties with no fixed seller-backed
+      duration — "Brand Warranty" (manufacturer/Apple/Samsung). Leave null when
+      warranty_days says it all."""
     _exec(lambda: supabase.table("prices").insert({
         "phone_id": phone_id, "price": price, "availability": availability,
         "condition": condition, "rating": rating, "review_count": review_count,
-        "warranty_months": warranty_months, "warranty_label": warranty_label,
+        "warranty_days": warranty_days, "warranty_label": warranty_label,
         "url": url,
     }).execute())
     _note_op(1)

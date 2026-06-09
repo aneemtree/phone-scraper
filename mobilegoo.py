@@ -20,7 +20,7 @@ import re
 import time
 import requests
 from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone, parse_size_string, shopify_option_index
-from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer
+from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer, months_to_days
 from obs import init_sentry, log_error
 
 SITE = "mobilegoo"
@@ -48,16 +48,16 @@ def parse_condition(raw):
 
 
 def parse_warranty(raw):
-    """Return (warranty_months, warranty_label) from the grade label's
+    """Return (warranty_days, warranty_label) from the grade label's
     parenthetical:
-      "Good (3 Months Seller Warranty)"          → (3, None)
-      "Good (7 Day Checking Warranty)"            → (None, "7-day warranty")
+      "Good (3 Months Seller Warranty)"          → (90, None)
+      "Good (7 Day Checking Warranty)"            → (7, None)
       "Superb (9 to 12 Months Brand Warranty)"   → (None, "Brand Warranty")
       "Superb (3 to 6 Months Apple Warranty)"    → (None, "Brand Warranty")
     A manufacturer/Apple/Samsung warranty is shown as "Brand Warranty" (per
-    product owner, regardless of stated months). A seller/service warranty with
-    a month duration gives months (ranges take the lower bound). A days-only
-    checking warranty gives an "N-day warranty" label. (None, None) if absent."""
+    product owner, regardless of stated duration). A seller/service warranty
+    with a month duration gives days (ranges take the lower bound); a days-only
+    checking warranty gives the day count. (None, None) if absent."""
     if not raw:
         return None, None
     s = str(raw).lower()
@@ -68,13 +68,13 @@ def parse_warranty(raw):
         return None, "Brand Warranty"
     rng = re.search(r"(\d+)\s*to\s*(\d+)\s*month", s)
     if rng:
-        return int(rng.group(1)), None
+        return months_to_days(int(rng.group(1))), None
     m = re.search(r"(\d+)\s*month", s)
     if m:
-        return int(m.group(1)), None
+        return months_to_days(int(m.group(1))), None
     d = re.search(r"(\d+)\s*day", s)
     if d:
-        return None, f"{int(d.group(1))}-day warranty"
+        return int(d.group(1)), None
     return None, None
 
 
@@ -153,7 +153,7 @@ def scrape():
                     storage = normalize_storage(storage_raw)
 
                 condition = parse_condition(condition_raw)
-                warranty_months, warranty_label = parse_warranty(condition_raw)
+                warranty_days, warranty_label = parse_warranty(condition_raw)
                 variant_id = v.get("id", "")
                 variant_url = f"{prod_url}?variant={variant_id}" if variant_id else prod_url
 
@@ -176,7 +176,7 @@ def scrape():
                         "variant_key": vkey, "condition": condition,
                         "price": price, "availability": availability,
                         "url": variant_url, "image_url": img_url,
-                        "warranty_months": warranty_months,
+                        "warranty_days": warranty_days,
                         "warranty_label": warranty_label,
                         "name": f"{model} {storage or ''}".strip(),
                     }
@@ -202,7 +202,7 @@ def scrape():
         save_price(
             pid, o["price"], availability=o["availability"],
             condition=condition, rating=None, review_count=None,
-            warranty_months=o.get("warranty_months"),
+            warranty_days=o.get("warranty_days"),
             warranty_label=o.get("warranty_label"), url=o["url"],
         )
         saved += 1

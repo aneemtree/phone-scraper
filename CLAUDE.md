@@ -107,16 +107,21 @@ has no real reviews (count must be > 0). Per-store source:
     `review_count` — free, already in the listing payload (~half its products
     have a few reviews each). thephonehub/cellbuddy expose the same fields but
     have NO reviews enabled (0), so nothing is stored.
-  - refit (Judge.me) + easyphones (Loox): products.json has no reviews, so the
-    scraper fetches the PRODUCT PAGE once per in-stock product and reads the
-    review app's schema.org `aggregateRating` (reviews.py fetch_aggregate_rating).
-    Only in-stock products are fetched (the OOS catalog pass skips them, so it
-    doesn't pull thousands of pages).
-  - NOT captured: gadgetrebirth exposes `rating`/`reviews` in its API for free,
-    but the figures (uniform 4.8–4.9★, hundreds–thousands per product on a small
-    store) read as inflated marketing social-proof, so they are deliberately NOT
-    stored. tetro/maplestore/mobilegoo/sahivalue have no reviews; grest/budli/
-    oldsold had none/partial on sampling.
+  - refit (Judge.me): products.json has no reviews, so the scraper fetches the
+    PRODUCT PAGE once per in-stock product and reads Judge.me's schema.org
+    `aggregateRating` (reviews.py fetch_aggregate_rating). Verified per-product
+    (e.g. iPhone 12=4.38/133, 13=4.72/350, 14=4.53/120). Only in-stock products
+    are fetched (the OOS catalog pass skips them, so it doesn't pull thousands of
+    pages).
+  - NOT captured:
+    - easyphones: its Loox widget serves a STORE-WIDE aggregateRating (the same
+      4.3/118 appears on different phones), not per-product reviews — so it's
+      excluded despite being fetchable.
+    - gadgetrebirth exposes `rating`/`reviews` in its API for free, but the
+      figures (uniform 4.8–4.9★, hundreds–thousands per product on a small store)
+      read as inflated marketing social-proof, so they are deliberately NOT stored.
+    - tetro/maplestore/mobilegoo/sahivalue have no reviews; grest/budli/oldsold
+      had none/partial on sampling.
   - reviews.py — fetch_aggregate_rating(url, session) → (rating, count) from a
     product page's JSON-LD aggregateRating (Judge.me/Loox/Yotpo/...); (None,None)
     unless both a rating and a non-zero count are present.

@@ -360,12 +360,16 @@ normalize_db.py (runs AFTER all scrapers, full pipeline + monthly catalog):
 deterministic, no AI/API key. Pass 0 deletes non-phones via is_phone(); Pass 1
 re-runs clean_model()/make_variant_key() over every row so existing data picks up
 normalization-rule improvements in place (recomputes model + variant_key; leaves
-the raw `name`). Cross-store duplicate merging is NOT a separate step — the
-deterministic storage-only variant_key already groups the same phone across stores
-once names are clean. canonical_key stays for the manual merge fallback only.
-This replaced the old AI-based normalize_ai.py (dropped): "learn from what we have
-and keep adding cases" — when a bad name/leak shows up, add the rule to
-clean_model() (e.g. a color to COLORS, a noise word) and the next run self-heals.
+the raw `name`) and applies the model_aliases canonical overrides. Pass 2
+(consensus de-leak) is the SELF-HEALING step: for a model with a trailing pure-
+alpha word, if a shorter base model (that word dropped) is sold by STRICTLY MORE
+stores, the word is store-specific noise (a colour/edition/grade) — strip it and
+recompute the key so the orphan merges (e.g. "Vivo V60e Noble" -> "Vivo V60e").
+Guarded by _PROTECT (variant-line words: pro/max/ultra/plus/lite/ce/edge/fe/fold/
+flip/note/...) and _BRANDS so real variants are never merged; needs no colour list.
+canonical_key stays for the manual merge fallback only. Still: when a recurring
+bad name/leak shows up, the cheapest fix is a rule in clean_model() (a colour to
+COLORS, a noise word) — but Pass 2 catches the long tail automatically.
 
 ### Error logging (Sentry)
 Optional Sentry error logging lives in obs.py: `init_sentry(SITE)` +

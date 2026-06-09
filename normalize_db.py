@@ -18,6 +18,7 @@ and the offers view still reads coalesce(canonical_key, variant_key).
 Run AFTER all scrapers complete.  Usage: python3 normalize_db.py
 """
 import os
+import re
 from dotenv import load_dotenv
 from supabase import create_client
 
@@ -120,6 +121,73 @@ def pass1_renormalize(phones):
     return updated
 
 
+# Variant-line words and brand/sub-brand words that are NEVER store-specific noise,
+# so the consensus de-leak below must not strip them (Pro/Max/CE/Edge/FE are real
+# different phones; brand words are identity).
+_PROTECT = set((
+    "pro max ultra plus lite neo turbo note fe mini fold flip edge ce air se prime "
+    "power ace active master racing explorer champion speed gt zoom fusion stylus "
+    "play prime nord narzo"
+).split())
+_BRANDS = set((
+    "apple iphone ipad samsung galaxy xiaomi mi redmi poco vivo iqoo oppo realme "
+    "narzo oneplus nord google pixel nothing cmf sony motorola moto asus honor "
+    "huawei nokia lava infinix tecno micromax fairphone lg"
+).split())
+
+
+def pass2_consensus_deleak(phones):
+    """Self-healing: strip a trailing colour/junk word from a model when a SHORTER
+    base model is sold by MORE stores (consensus that the extra word is store-
+    specific noise), e.g. 'Vivo V60e Noble' -> 'Vivo V60e'. Never strips variant-
+    line words (Pro/Max/CE/Edge/FE/...) or brand words, and only when the base is
+    strictly more widespread — so real variants are safe. No colour list to maintain.
+    """
+    print("\n── Pass 2: consensus de-leak (strip store-specific colour/junk) ──")
+    model_sites = {}
+    for p in phones:
+        m = (p.get("model") or "").strip()
+        if m:
+            model_sites.setdefault(m, set()).add(p.get("site"))
+    models = set(model_sites)
+
+    def base_for(model):
+        toks = model.split()
+        for drop in (1, 2):
+            if len(toks) - drop < 2:            # keep at least brand + one token
+                break
+            tail = [t.lower() for t in toks[-drop:]]
+            if not all(re.fullmatch(r"[a-z]+", t) for t in tail):   # only pure-alpha words
+                continue
+            if any(t in _PROTECT or t in _BRANDS for t in tail):
+                continue
+            base = " ".join(toks[:-drop])
+            if base in models and len(model_sites[base]) > len(model_sites[model]):
+                return base
+        return None
+
+    remap = {m: base_for(m) for m in models}
+    remap = {m: b for m, b in remap.items() if b}
+    updated = 0
+    for p in phones:
+        b = remap.get(p.get("model"))
+        if not b:
+            continue
+        patch = {"model": b}
+        new_key = make_variant_key(b, p.get("storage"), p.get("ram"))
+        if new_key != p.get("variant_key"):
+            patch["variant_key"] = new_key
+        try:
+            sb.table("phones").update(patch).eq("id", p["id"]).execute()
+            updated += 1
+        except Exception as e:
+            print(f"  Update error for {p['id']}: {e}")
+    for m, b in sorted(remap.items()):
+        print(f"  de-leak: {m!r} -> {b!r}")
+    print(f"Pass 2 complete: {updated} rows de-leaked ({len(remap)} models)")
+    return updated
+
+
 def normalize():
     print("Fetching all phones from DB...")
     phones = fetch_phones()
@@ -131,6 +199,8 @@ def normalize():
         print(f"Phones remaining after cleanup: {len(phones)}")
 
     pass1_renormalize(phones)
+    phones = fetch_phones()              # re-fetch so Pass 2 sees Pass 1's models
+    pass2_consensus_deleak(phones)
     print("\n✓ Normalization complete.")
 
 

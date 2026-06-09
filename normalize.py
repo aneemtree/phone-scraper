@@ -37,6 +37,7 @@ COLORS = [
     "dash", "sunshine", "sunset", "orange", "emerald", "brown", "pearl",
     "peari", "lilac", "iceblue", "graphite", "graphit", "awesome", "mostly",
     "prism cube", "prism crush", "cube", "crush", "lunar", "deepsea", "stormy",
+    "noble", "glacier", "aqua", "nebula", "nerbula",
 ]
 
 # Roman numerals (II-XII) that title-casing would lower-case (e.g. Sony "Xperia 1
@@ -408,7 +409,10 @@ def clean_model(title: str) -> str:
     t = re.sub(r"\bunbox(?:ed)?\b", " ", t, flags=re.I)  # strip unboxed/unbox
     t = re.sub(r"[/\\|]+$", "", t).strip()  # strip trailing slashes/pipes
     t = re.sub(r"\b(controlz|cashify|refit|xtracover|croma)\b", " ", t, flags=re.I)
-    t = re.sub(r"\b(special series|saver series|aurora|titanium|esim|e-?sim|physical sim|single sim|dual sim|dual)\b", " ", t, flags=re.I)
+    t = re.sub(r"\b(special series|saver series|aurora|titanium|esim|e-?sim|physical sim|single sim|dual sim|dual|sim\s*slot)\b", " ", t, flags=re.I)
+    # A grade word leaked into the model name (a scraper didn't separate condition):
+    # strip Fair/Good/Superb only at the END, so "Fairphone" / model words are safe.
+    t = re.sub(r"\b(superb|fair|good)\s*$", "", t, flags=re.I)
     # Spacing: GSMArena and some stores write "Z Fold4"/"Reno15"/"Nord CE3" while
     # others use a space; unify to the spaced form so the same phone shares one key.
     t = re.sub(r"\b(fold|flip|reno)(\d)", r"\1 \2", t, flags=re.I)

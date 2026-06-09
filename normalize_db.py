@@ -199,8 +199,12 @@ def normalize():
         print(f"Phones remaining after cleanup: {len(phones)}")
 
     pass1_renormalize(phones)
-    phones = fetch_phones()              # re-fetch so Pass 2 sees Pass 1's models
-    pass2_consensus_deleak(phones)
+    # Pass 2 (consensus de-leak) is intentionally NOT run automatically: store-count
+    # consensus auto-mutates and wrongly merges genuine single-store variants
+    # (e.g. "Motorola Edge 60 Stylus" -> "Edge 60"). That judgment is now handled by
+    # normalize_ai.py, which is PROPOSE-ONLY into the normalize_review table (a human
+    # promotes good fixes to clean_model rules / model_aliases). pass2_consensus_deleak
+    # is kept above for the manual/offline fallback only.
     print("\n✓ Normalization complete.")
 
 

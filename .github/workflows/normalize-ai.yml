@@ -1,0 +1,38 @@
+name: AI name-normalizer (propose-only)
+
+# Manual / weekly: ask Claude to review the ambiguous residue of model names that
+# the deterministic + GSMArena passes can't settle, and queue suggestions into the
+# normalize_review table (NOTHING is auto-applied — a human promotes good fixes to
+# clean_model rules / model_aliases). Dispatch + a weekly schedule so it can't run
+# up API cost on the twice-daily scrape. Needs the ANTHROPIC_API_KEY secret; if the
+# runner IP is throttled by GSMArena, run normalize_ai.py locally instead.
+on:
+  workflow_dispatch:
+    inputs:
+      dry:
+        description: "Dry run (print proposals, write nothing)"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "0 2 * * 1"   # 02:00 UTC every Monday
+
+permissions:
+  contents: read
+
+jobs:
+  normalize-ai:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Propose name fixes
+        run: python normalize_ai.py ${{ inputs.dry && '--dry' || '' }}

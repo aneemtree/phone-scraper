@@ -47,6 +47,28 @@ def parse_condition(raw):
     return normalize_condition(clean or raw)
 
 
+def parse_warranty(raw):
+    """Months of warranty from the grade label's parenthetical, e.g.
+    "Good (3 Months Seller Warranty)" → 3, "Superb (1 Month ...)" → 1.
+    Ranges ("Superb (9 to 12 Months Brand Warranty)") take the lower (minimum
+    guaranteed) bound; a days-only checking warranty ("7 Day Checking
+    Warranty") → 0; None when no warranty is stated."""
+    if not raw:
+        return None
+    s = str(raw).lower()
+    if "warrant" not in s:
+        return None
+    rng = re.search(r"(\d+)\s*to\s*(\d+)\s*month", s)
+    if rng:
+        return int(rng.group(1))
+    m = re.search(r"(\d+)\s*month", s)
+    if m:
+        return int(m.group(1))
+    if re.search(r"\d+\s*day", s):
+        return 0
+    return None
+
+
 def fetch_collection(collection):
     """Fetch all products from a Shopify collection via products.json API."""
     products = []
@@ -122,6 +144,7 @@ def scrape():
                     storage = normalize_storage(storage_raw)
 
                 condition = parse_condition(condition_raw)
+                warranty_months = parse_warranty(condition_raw)
                 variant_id = v.get("id", "")
                 variant_url = f"{prod_url}?variant={variant_id}" if variant_id else prod_url
 
@@ -144,6 +167,7 @@ def scrape():
                         "variant_key": vkey, "condition": condition,
                         "price": price, "availability": availability,
                         "url": variant_url, "image_url": img_url,
+                        "warranty_months": warranty_months,
                         "name": f"{model} {storage or ''}".strip(),
                     }
 
@@ -167,7 +191,8 @@ def scrape():
         )
         save_price(
             pid, o["price"], availability=o["availability"],
-            condition=condition, rating=None, review_count=None, url=o["url"],
+            condition=condition, rating=None, review_count=None,
+            warranty_months=o.get("warranty_months"), url=o["url"],
         )
         saved += 1
         print(f"  saved: {o['name']:40} [{condition:15}] {o['availability']:12} ₹{o['price']:.0f}")

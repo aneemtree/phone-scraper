@@ -146,6 +146,10 @@ def build_offers(products, include_oos=False):
             continue
         url = f"{BASE_URL}/product/{prod.get('sku', '')}/"
         img_url = get_image(prod)
+        # Product-level warranty (the API also carries a `warrantyOption` like
+        # "15-days"; warrantyMonths is 0 for those sub-month options).
+        wm = prod.get("warrantyMonths")
+        warranty_months = int(wm) if isinstance(wm, (int, float)) and int(wm) > 0 else None
 
         variants = prod.get("variants") or []
         groups = {}  # (condition, storage) -> {"in": [prices], "oos": [prices]}
@@ -176,6 +180,7 @@ def build_offers(products, include_oos=False):
                     "model": model, "storage": storage, "variant_key": variant_key,
                     "condition": cond, "price": price, "availability": availability,
                     "url": url, "image_url": img_url,
+                    "warranty_months": warranty_months,
                     "name": f"{model} {storage}".strip(),
                 }
     return best
@@ -209,7 +214,8 @@ def scrape():
             in_stock=(o["name"] in in_stock_names),
         )
         save_price(pid, o["price"], availability=o["availability"],
-                   condition=cond, url=o["url"])
+                   condition=cond, warranty_months=o.get("warranty_months"),
+                   url=o["url"])
         saved += 1
         print(f"  saved: {o['name']:32} [{cond:10}] {o['availability']:12} ₹{o['price']:.0f}")
 

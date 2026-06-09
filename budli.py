@@ -57,6 +57,23 @@ def condition_from_title(title):
     return normalize_condition("Refurbished")  # no/other paren -> Unknown Condition
 
 
+def warranty_from_body(body):
+    """Budli states the warranty in the product body, e.g. "6 months Budli
+    service warranty", "1 year Budli service warranty", or "No warranty".
+    Returns months (year→×12), 0 for an explicit "No warranty", or None when
+    the duration isn't stated (e.g. "Brand warranty till <date>")."""
+    if not body:
+        return None
+    s = re.sub(r"<[^>]+>", " ", body).lower()
+    m = re.search(r"(\d+)\s*(year|month)s?\b[^.<\n]{0,25}warrant", s)
+    if m:
+        n = int(m.group(1))
+        return n * 12 if m.group(2) == "year" else n
+    if "no warranty" in s:
+        return 0
+    return None
+
+
 def storage_opt_pos(prod):
     """1-based position of the Storage option (handles the 'Storgae' typo), or None."""
     for o in prod.get("options", []):
@@ -133,6 +150,7 @@ def scrape():
         handle = prod.get("handle", "")
         url = f"{BASE_URL}/products/{handle}"
         img_url = get_image(prod)
+        warranty_months = warranty_from_body(prod.get("body_html", ""))
         title_storage = storage_from_title(title)
         spos = storage_opt_pos(prod)
 
@@ -165,6 +183,7 @@ def scrape():
                     "variant_key": variant_key, "condition": condition,
                     "price": price, "availability": availability,
                     "url": variant_url, "image_url": img_url,
+                    "warranty_months": warranty_months,
                     "name": f"{model} {storage}".strip(),
                 }
 
@@ -186,7 +205,8 @@ def scrape():
         )
         save_price(
             pid, o["price"], availability=o["availability"],
-            condition=o["condition"], url=o["url"],
+            condition=o["condition"], warranty_months=o.get("warranty_months"),
+            url=o["url"],
         )
         saved += 1
         print(f"  saved: {o['name']:38} [{o['condition']:18}] ₹{o['price']:.0f}  [{o['availability']}]")

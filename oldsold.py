@@ -21,7 +21,7 @@ import re
 import time
 import requests
 from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone, parse_size_string
-from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer
+from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer, months_to_days, YEAR_DAYS
 from obs import init_sentry, log_error
 
 SITE = "oldsold"
@@ -51,6 +51,25 @@ def parse_ram_storage(value):
     # Bare number → storage GB
     if re.match(r"^\d+$", value):
         return None, normalize_storage(f"{value}GB")
+    return None, None
+
+
+def parse_warranty(value):
+    """Return (warranty_days, warranty_label) from the 'Warranty' option:
+    "6 Months"→(180,None), "1 Month"→(30,None), "1 Year"→(365,None),
+    "7 Days"→(7,None). (None, None) when no warranty is stated."""
+    if not value:
+        return None, None
+    s = str(value).lower()
+    m = re.search(r"(\d+)\s*month", s)
+    if m:
+        return months_to_days(int(m.group(1))), None
+    y = re.search(r"(\d+)\s*year", s)
+    if y:
+        return int(y.group(1)) * YEAR_DAYS, None
+    d = re.search(r"(\d+)\s*day", s)
+    if d:
+        return int(d.group(1)), None
     return None, None
 
 
@@ -132,8 +151,10 @@ def scrape():
             # Detect option values by NAME (order varies)
             rs_value = get_option_value(prod, v, ["ram", "storage", "memory"])
             cond_value = get_option_value(prod, v, ["condition", "grade"])
+            warr_value = get_option_value(prod, v, ["warranty"])
 
             ram, storage = parse_ram_storage(rs_value)
+            warranty_days, warranty_label = parse_warranty(warr_value)
             condition = normalize_condition(cond_value) if cond_value else normalize_condition("Refurbished")
 
             if not storage:
@@ -167,6 +188,8 @@ def scrape():
                     "variant_key": vkey, "condition": condition,
                     "price": price, "availability": availability,
                     "url": variant_url, "image_url": img_url,
+                    "warranty_days": warranty_days,
+                    "warranty_label": warranty_label,
                     "name": (f"{model} {ram}/{storage}" if ram and storage
                              else f"{model} {storage or ''}").strip(),
                 }
@@ -191,7 +214,9 @@ def scrape():
         )
         save_price(
             pid, o["price"], availability=o["availability"],
-            condition=condition, rating=None, review_count=None, url=o["url"],
+            condition=condition, rating=None, review_count=None,
+            warranty_days=o.get("warranty_days"),
+            warranty_label=o.get("warranty_label"), url=o["url"],
         )
         saved += 1
         print(f"  saved: {o['name']:40} [{condition:15}] ₹{o['price']:.0f}")

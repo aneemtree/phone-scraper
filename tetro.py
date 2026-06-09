@@ -28,7 +28,7 @@ import re
 import time
 import requests
 from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone, shopify_option_index
-from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer
+from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer, months_to_days
 from obs import init_sentry, log_error
 
 SITE = "tetro"
@@ -132,7 +132,7 @@ def scrape():
                     "model": model, "storage": storage, "ram": None,
                     "variant_key": variant_key, "price": price,
                     "availability": availability, "url": variant_url,
-                    "image_url": img_url, "warranty_months": warranty_months,
+                    "image_url": img_url, "warranty_days": months_to_days(warranty_months),
                     "name": f"{model} {storage}".strip(),
                 }
 
@@ -155,7 +155,7 @@ def scrape():
         )
         save_price(
             pid, o["price"], availability=o["availability"],
-            condition=CONDITION, warranty_months=o.get("warranty_months"), url=o["url"],
+            condition=CONDITION, warranty_days=o.get("warranty_days"), url=o["url"],
         )
         saved += 1
         print(f"  saved: {o['name']:32} [{CONDITION}] {o['availability']:12} ₹{o['price']:.0f}")

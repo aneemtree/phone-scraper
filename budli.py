@@ -30,7 +30,7 @@ import re
 import time
 import requests
 from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone
-from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer
+from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer, months_to_days, YEAR_DAYS
 from obs import init_sentry, log_error
 
 SITE = "budli"
@@ -55,6 +55,28 @@ def condition_from_title(title):
         if "refurbish" in cl:
             return normalize_condition("Refurbished")  # -> Unknown Condition
     return normalize_condition("Refurbished")  # no/other paren -> Unknown Condition
+
+
+def warranty_from_body(body):
+    """Return (warranty_days, warranty_label) from the product body:
+      "6 months Budli service warranty"  → (180, None)
+      "1 year Budli service warranty"     → (365, None)
+      "Brand warranty till 13-May-2027"   → (None, "Brand Warranty")
+      "No warranty"                       → (0, None)  (explicitly none)
+    (None, None) when nothing is stated. A manufacturer/brand warranty is shown
+    as "Brand Warranty" (its remaining duration isn't a Budli-backed promise)."""
+    if not body:
+        return None, None
+    s = re.sub(r"<[^>]+>", " ", body).lower()
+    m = re.search(r"(\d+)\s*(year|month)s?\b[^.<\n]{0,25}warrant", s)
+    if m:
+        n = int(m.group(1))
+        return (n * YEAR_DAYS if m.group(2) == "year" else months_to_days(n)), None
+    if "brand warranty" in s:
+        return None, "Brand Warranty"
+    if "no warranty" in s:
+        return 0, None
+    return None, None
 
 
 def storage_opt_pos(prod):
@@ -133,6 +155,7 @@ def scrape():
         handle = prod.get("handle", "")
         url = f"{BASE_URL}/products/{handle}"
         img_url = get_image(prod)
+        warranty_days, warranty_label = warranty_from_body(prod.get("body_html", ""))
         title_storage = storage_from_title(title)
         spos = storage_opt_pos(prod)
 
@@ -165,6 +188,8 @@ def scrape():
                     "variant_key": variant_key, "condition": condition,
                     "price": price, "availability": availability,
                     "url": variant_url, "image_url": img_url,
+                    "warranty_days": warranty_days,
+                    "warranty_label": warranty_label,
                     "name": f"{model} {storage}".strip(),
                 }
 
@@ -186,7 +211,8 @@ def scrape():
         )
         save_price(
             pid, o["price"], availability=o["availability"],
-            condition=o["condition"], url=o["url"],
+            condition=o["condition"], warranty_days=o.get("warranty_days"),
+            warranty_label=o.get("warranty_label"), url=o["url"],
         )
         saved += 1
         print(f"  saved: {o['name']:38} [{o['condition']:18}] ₹{o['price']:.0f}  [{o['availability']}]")

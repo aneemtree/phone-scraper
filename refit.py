@@ -23,7 +23,7 @@ import re
 import time
 import requests
 from normalize import clean_model, normalize_storage, make_variant_key, parse_size_string, normalize_condition, is_phone, shopify_option_index
-from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer
+from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer, months_to_days
 from obs import init_sentry, log_error
 
 SITE = "refit"
@@ -186,7 +186,7 @@ def scrape():
                     "availability": availability,
                     "url": variant_url,
                     "image_url": img_url,
-                    "warranty_months": warranty_months,
+                    "warranty_days": months_to_days(warranty_months),
                     "rating": rating,
                     "review_count": review_count,
                     "name": f"{model} {storage or ''}".strip(),
@@ -217,7 +217,7 @@ def scrape():
             pid, o["price"], availability=o["availability"],
             condition=grade, rating=o.get("rating"),
             review_count=o.get("review_count"),
-            warranty_months=o.get("warranty_months"),
+            warranty_days=o.get("warranty_days"),
             url=o["url"],
         )
         saved += 1

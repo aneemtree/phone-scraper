@@ -28,7 +28,7 @@ import re
 import time
 import requests
 from normalize import clean_model, make_variant_key, parse_size_string, normalize_condition, is_phone, shopify_option_index
-from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer
+from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer, months_to_days
 from obs import init_sentry, log_error
 
 SITE = "easyphones"
@@ -163,7 +163,7 @@ def scrape():
                     "variant_key": variant_key, "grade": grade,
                     "price": lowest_price, "availability": availability,
                     "url": variant_url, "image_url": img_url,
-                    "warranty_months": warranty_months,
+                    "warranty_days": months_to_days(warranty_months),
                     "name": f"{model} {storage or ''}".strip(),
                 }
 
@@ -186,7 +186,7 @@ def scrape():
         )
         save_price(
             pid, o["price"], availability=o["availability"],
-            condition=grade, warranty_months=o.get("warranty_months"), url=o["url"],
+            condition=grade, warranty_days=o.get("warranty_days"), url=o["url"],
         )
         saved += 1
         print(f"  saved: {o['name']:35} [{grade:12}] {o['availability']:12} ₹{o['price']:.0f}")

@@ -129,11 +129,28 @@ def grade_for(handle):
 
 
 def fetch_grades(products):
-    """Threaded, polite per-unit grade lookup. handle -> grade."""
+    """Threaded, polite per-unit grade lookup. handle -> grade.
+
+    Concurrency (WORKERS) occasionally 429s a handful of units → grade_for returns
+    None. Sequential fetches are 100% reliable, so re-fetch the misses one-by-one
+    instead of letting them fall back to "Pre-owned". Anything STILL unread (truly
+    no swatch — effectively never) keeps the honest "Pre-owned" label."""
     handles = [p["handle"] for p in products]
     with ThreadPoolExecutor(max_workers=WORKERS) as ex:
         results = list(ex.map(grade_for, handles))
-    return dict(zip(handles, results))
+    grades = dict(zip(handles, results))
+
+    misses = [h for h, g in grades.items() if g is None]
+    if misses:
+        print(f"  {len(misses)} units ungraded after threaded pass — re-fetching sequentially...")
+        for h in misses:
+            g = grade_for(h)
+            if g:
+                grades[h] = g
+            time.sleep(DELAY)
+        still = sum(1 for h in misses if grades.get(h) is None)
+        print(f"  recovered {len(misses) - still}/{len(misses)}; {still} still ungraded (→ 'Pre-owned')")
+    return grades
 
 
 def _better_offer(new_availability, new_price, cur):

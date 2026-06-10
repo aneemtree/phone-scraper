@@ -506,3 +506,22 @@ Claude-written ORIGINAL posts with a Pexels image -> Supabase `blog_posts`
     public read on blog_posts only). Secrets needed on the repo: ANTHROPIC_API_KEY,
     PEXELS_API_KEY (others already present). `python3 news.py --dry` fetches +
     clusters + extracts with NO Claude/Pexels/DB writes.
+
+### Price-drop push notifications (notify.py)
+Web Push alerts when a watched phone's price drops. Subscriptions live in the
+`price_alerts` table (one row per browser push subscription + phone), written by
+the website's /api/notify/subscribe route; notify.py SENDS the pushes.
+  - RUN: last step of scrape.yml (after normalize_db) — prices only change on a
+    scrape, so that's the only moment a drop can happen. No-op unless
+    VAPID_PRIVATE_KEY is set.
+  - LOGIC: for each watched coalesce key (price_alerts.variant_key = card.baseKey),
+    recompute current lowest in-stock price from the offers view; if it's below
+    the subscriber's stored last_price, send a push ("Price drop on <model>, now
+    ₹X (was ₹Y)") and re-baseline last_price to the current price. Expired subs
+    (webpush 404/410) are deleted.
+  - PUSH: pywebpush + VAPID. Secrets: VAPID_PRIVATE_KEY (base64url raw key paired
+    with the website's NEXT_PUBLIC_VAPID_PUBLIC_KEY), VAPID_SUBJECT (mailto:).
+  - SCHEMA: price_alerts (variant_key, endpoint, p256dh, auth, last_price, url,
+    model; unique(endpoint,variant_key); RLS, service-key only). The website
+    stores `url` (the exact /phone/<slug> the user subscribed from) + `model` so
+    the notification deep-links and reads naturally.

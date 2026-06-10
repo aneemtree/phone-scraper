@@ -176,11 +176,20 @@ SYSTEM_PROMPT = (
     "source articles provided. Never copy sentences or distinctive phrasing.\n"
     "- 3 to 6 paragraphs, 250-450 words total. Plain text paragraphs, no "
     "markdown, no headings, no links.\n"
-    "- Neutral, factual news tone. Lead with the news, then details, then "
-    "context. Mention India pricing/availability when the sources cover it.\n"
-    "- Title: clear and specific, under 90 characters, no clickbait.\n"
+    "- VOICE: sound like a real person who loves phones telling a friend the "
+    "news. Conversational, energetic, direct. Use contractions. Vary sentence "
+    "length. No corporate or press-release tone, no robotic phrasing.\n"
+    "- NEVER use the em dash '—' or en dash '–' anywhere, in the title or the "
+    "body. Use a comma, a period, or the word 'and' instead.\n"
+    "- Stay factually accurate to the sources. Lead with the news, then "
+    "details, then context. Mention India pricing/availability when the "
+    "sources cover it.\n"
+    "- TITLE: sensational and curiosity-driven, the kind people can't help "
+    "clicking, e.g. \"You Won't Believe What Apple Just Launched\" or \"This "
+    "Phone Just Got a Massive Price Cut\". Still truthful, under 90 characters, "
+    "no em dashes.\n"
     "- image_query: a 2-4 word stock photo search likely to match generic "
-    "photos (e.g. 'samsung smartphone closeup', 'smartphone repair') — never "
+    "photos (e.g. 'samsung smartphone closeup', 'smartphone repair'), never "
     "model numbers that stock sites won't have.\n"
     "- DUPLICATES: you are given the titles+slugs of recently published posts. "
     "If the story you're given is substantially the same story as one of them "
@@ -188,6 +197,13 @@ SYSTEM_PROMPT = (
     "post's slug and leave the other fields minimal. Otherwise duplicate_of "
     "must be null."
 )
+
+
+def scrub_dashes(text):
+    """Hard guarantee of the no-dash style rule even if the model slips."""
+    text = re.sub(r"\s*—\s*", ", ", text)   # em dash -> comma
+    text = re.sub(r"\s*–\s*", "-", text)    # en dash -> hyphen (ranges)
+    return text
 
 
 def write_post(cluster, sources_text, recent_posts):
@@ -369,7 +385,8 @@ def run(dry=False):
                     print(f"  DUPLICATE (slug {slug} not found) — recorded only: {titles}")
                 continue
 
-            paragraphs = [p for p in result.get("paragraphs") or [] if p.strip()]
+            paragraphs = [scrub_dashes(p) for p in result.get("paragraphs") or [] if p.strip()]
+            result["title"] = scrub_dashes(result.get("title") or "")
             if not result.get("title") or len(paragraphs) < 2:
                 print(f"  SKIP (writer returned thin content): {titles}")
                 record_articles(supabase, _exec, cluster, None)

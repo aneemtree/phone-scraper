@@ -18,7 +18,7 @@ import json
 import time
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, Error
 from normalize import clean_model, normalize_storage, normalize_ram, make_variant_key, parse_size_string, normalize_condition, is_phone
 from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
 from obs import init_sentry, log_error
@@ -104,6 +104,26 @@ def click_option(page, heading_keyword, label):
     return page.evaluate(js, [heading_keyword.lower(), label])
 
 
+def _safe_eval(page, js, *args, default=None, tries=2):
+    """page.evaluate that tolerates a client-side navigation destroying the JS
+    execution context mid-call (ControlZ's RSC pages occasionally re-navigate while
+    we read them). Retry after letting the DOM settle; return `default` if it keeps
+    racing, since every caller's value is non-critical (image/rating/price probe)."""
+    for attempt in range(tries):
+        try:
+            return page.evaluate(js, *args)
+        except Error as e:
+            if "Execution context was destroyed" not in str(e):
+                raise                       # a real error, not a navigation race
+            if attempt == tries - 1:
+                return default              # kept racing — skip this (non-critical) probe
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=5000)
+            except Error:
+                pass
+    return default
+
+
 def read_price(page):
     """Read the 'Starting From' price (the .text-primary <p> near that label)."""
     js = """() => {
@@ -125,7 +145,7 @@ def read_image(page):
                 || imgs.find(i => i.naturalWidth > 200);
       return pick ? pick.src : null;
     }"""
-    raw = page.evaluate(js)
+    raw = _safe_eval(page, js)
     if raw and "/_next/image" in raw:
         import urllib.parse as up
         q = up.urlparse(raw).query

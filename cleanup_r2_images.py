@@ -20,7 +20,7 @@ SITES = (
     "grest", "itradeit", "maplestore", "mobilegoo", "oldsold", "ovantica",
     "refit", "sahivalue", "tetro", "thephonehub", "xtracover",
 )
-KEEP_PREFIXES = ("img/", "specs/", "admin/", "logos/") + tuple(f"{s}/" for s in SITES)
+KEEP_PREFIXES = ("img/", "specs/", "admin/", "logos/", "blog/") + tuple(f"{s}/" for s in SITES)
 
 
 def _iter_keys(client, bucket):

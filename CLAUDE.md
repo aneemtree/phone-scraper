@@ -475,3 +475,34 @@ Don't assume site structure — test against real data first. When the sandbox
 can't reach a site, hand the user a self-contained `python3 - <<'EOF'` block to
 run and paste back. Validate a parser on saved/live payloads before editing a
 scraper, and never push a new/changed scraper until its output is verified.
+### Auto news blog (news.py)
+Fully automatic phone-news blog: Google Alerts RSS -> clustered stories ->
+Claude-written ORIGINAL posts with a Pexels image -> Supabase `blog_posts`
+(rendered at /blog on the website). Workflow `news.yml` (every 6h + dispatch).
+  - FEEDS: the `news_feeds` table holds Google Alerts "deliver to RSS" URLs
+    (insert url+label; active=true). No code change to add/remove feeds.
+  - PIPELINE per run: parse Atom feeds (Google redirect links unwrapped to the
+    real article URL) -> drop URLs already in `news_articles` (cross-run dedup
+    memory) -> cluster same-story coverage by title-token containment >= 0.5 ->
+    fetch each source's FULL text (trafilatura; posts are never written from
+    alert snippets — a cluster with no fetchable full text is skipped and NOT
+    recorded, so it retries next run) -> one Claude call writes the post ->
+    Pexels image -> insert blog_posts + record news_articles with post_id.
+  - WRITER: claude-haiku-4-5 via the anthropic SDK, structured JSON output
+    (output_config json_schema): {duplicate_of, title, paragraphs, image_query}.
+    The prompt carries the last 14 days of post titles+slugs: if the story
+    RESURFACES from another outlet in a later run, the model returns
+    duplicate_of=<slug> and the new outlets are attached to that post's
+    `sources` instead of publishing a second post. Original wording enforced by
+    prompt; body stored as escaped <p> HTML (we build it, model returns plain
+    paragraphs).
+  - IMAGE: Pexels search (PEXELS_API_KEY) with the model's generic 2-4 word
+    query, first landscape result hosted on R2 at `blog/<slug>.jpg` via
+    host_image (falls back to hotlinking the Pexels CDN URL without R2 creds);
+    photographer + photo page stored as image_credit/_url. Unsplash was
+    deliberately skipped (its API terms require hotlinking + download-tracking).
+    cleanup_r2_images.py keeps the `blog/` prefix.
+  - SCHEMA: blog_schema.sql (news_feeds, news_articles, blog_posts; RLS with
+    public read on blog_posts only). Secrets needed on the repo: ANTHROPIC_API_KEY,
+    PEXELS_API_KEY (others already present). `python3 news.py --dry` fetches +
+    clusters + extracts with NO Claude/Pexels/DB writes.

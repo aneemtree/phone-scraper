@@ -190,17 +190,27 @@ gadgets.beebom.com front-back render at ~640-1000px) in `specs.image_url`; FALLB
 = GSMArena (gsmarena.py bigpic, only ~160px) in `specs.image_fallback`, shown only
 when Beebom has no match. Admin uploads also write `image_url` (image_source=
 'admin'). Both enrichers write the SAME per-model specs row via upsert_specs(), to
-SEPARATE columns, so neither clobbers the other. Stores are NO LONGER scraped for
-images. host_image() in db.py uploads to Cloudflare R2 (zero egress) on first
-sighting (head_object skip); paths: Beebom `img/{model_slug}.jpg`, GSMArena
-`specs/{model_slug}.jpg`, admin `admin/{model_slug}.jpg`. ensure_image() is a
-DEPRECATED no-op at the scrapers' call sites — phones.image_url is unused for
-display. cleanup_r2_images.py keeps img/+specs/+admin/, deletes legacy `{site}/`. Config via env: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
-R2_BUCKET, R2_PUBLIC_BASE_URL. Phones with no canonical image surface in the
+SEPARATE columns, so neither clobbers the other. host_image() in db.py uploads to
+Cloudflare R2 (zero egress) on first sighting (head_object skip); paths: Beebom
+`img/{model_slug}.jpg`, GSMArena `specs/{model_slug}.jpg`, admin
+`admin/{model_slug}.jpg`.
+STORE IMAGES (LAST-RESORT FALLBACK, re-enabled): every scraper calls
+ensure_image(image_url, "{site}/{variant_key}.jpg") and saves the result into
+phones.image_url, which the offers view coalesces LAST (specs.image_url →
+specs.image_fallback → phones.image_url) so no in-stock card is ever blank.
+ensure_image fetches each device's store image ONCE: it lists the `{site}/`
+R2 prefix once per run (cached set, no per-phone HEADs) and skips any device
+whose image is already hosted; only missing devices are downloaded + uploaded
+(host_image). Failures aren't cached (retry next run); without R2 creds the
+raw store URL is saved instead. The scrape workflows already pass the R2 env
+at job level, so the twice-daily cron picks this up with no workflow change.
+cleanup_r2_images.py keeps img/+specs/+admin/+logos/ AND the active `{site}/`
+prefixes (store images are no longer legacy — do NOT delete them). Config via
+env: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET,
+R2_PUBLIC_BASE_URL. Phones with no canonical image surface in the
 `missing_images` view (by MODEL) for manual admin upload
 (gsmarena.set_image / `python3 gsmarena.py --set-image "<model>" <url>`).
-The DB stays on Supabase. (Legacy per-store R2 images under `{site}/…` are now
-orphaned and can be deleted to reclaim space.)
+The DB stays on Supabase.
 
 ### GSMArena specs & canonical images (gsmarena.py)
 Enriches each phone MODEL with a spec sheet and a canonical product image from

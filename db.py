@@ -292,14 +292,62 @@ def r2_public_url(dest_path):
 
 
 def ensure_image(source_url, dest_path):
-    """DEPRECATED no-op kept for the scrapers' call sites.
+    """Fallback store image, fetched ONCE per device (re-enabled).
 
-    The canonical phone image now comes from GSMArena (specs.image_url, hosted via
-    host_image at specs/{variant_key}.jpg) and is served by the offers view; stores
-    are no longer scraped for images, so this neither downloads nor uploads anything.
-    Returns the source URL unchanged (phones.image_url is no longer used for display).
+    Every scraper calls this with the product's store image and a
+    {site}/{variant_key}.jpg destination; the returned URL goes into
+    phones.image_url, which the offers view uses as the LAST-RESORT card image
+    (after the Beebom/admin specs.image_url and the GSMArena
+    specs.image_fallback) so no in-stock card is ever blank.
+
+    "Once per device": if the device already has a hosted store image (its key
+    already exists on R2) it is returned WITHOUT downloading anything — one
+    paginated LIST per store prefix per run makes that check free per phone.
+    Only devices with no hosted image yet are downloaded + uploaded
+    (host_image). Failures aren't cached, so they retry next run. Without R2
+    creds the raw store URL is returned so runs still work.
     """
-    return source_url
+    if not source_url:
+        return None
+    client = _r2()
+    if client is None:
+        return source_url  # not configured — use the store's image directly
+    prefix = dest_path.split("/", 1)[0] + "/"
+    try:
+        existing = _r2_prefix_keys(client, prefix)
+    except Exception:
+        existing = None  # listing failed — host_image's own HEAD check covers us
+    if existing is not None and dest_path in existing:
+        return r2_public_url(dest_path)
+    hosted = host_image(source_url, dest_path)
+    if existing is not None and hosted == r2_public_url(dest_path):
+        existing.add(dest_path)  # hosted OK — skip for the rest of the run
+    return hosted
+
+
+# Existing R2 keys per top-level prefix ("cashify/"), listed lazily ONCE per run
+# so ensure_image's once-per-device check costs one LIST per store rather than a
+# HEAD or download per phone.
+_r2_seen_keys = {}
+
+
+def _r2_prefix_keys(client, prefix):
+    keys = _r2_seen_keys.get(prefix)
+    if keys is None:
+        keys = set()
+        token = None
+        while True:
+            kw = {"Bucket": R2_BUCKET, "Prefix": prefix, "MaxKeys": 1000}
+            if token:
+                kw["ContinuationToken"] = token
+            resp = client.list_objects_v2(**kw)
+            for o in resp.get("Contents", []):
+                keys.add(o["Key"])
+            if not resp.get("IsTruncated"):
+                break
+            token = resp.get("NextContinuationToken")
+        _r2_seen_keys[prefix] = keys
+    return keys
 
 
 def host_image(source_url, dest_path):

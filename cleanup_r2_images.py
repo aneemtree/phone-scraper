@@ -1,9 +1,11 @@
 """
 Delete orphaned images from Cloudflare R2.
 
-Images now live under `img/` (Beebom primary), `specs/` (GSMArena fallback), and
-`admin/` (manual uploads) — all kept. Only the legacy per-store images under
-`{site}/` are stale; this removes those.
+Kept prefixes: `img/` (Beebom primary), `specs/` (GSMArena fallback), `admin/`
+(manual uploads), `logos/` (store logos), and the per-store `{site}/` prefixes —
+store images are ACTIVE again (ensure_image hosts each device's store image once
+as the last-resort card fallback), so they must NOT be deleted. Only keys outside
+all of these (renamed/retired stores, strays) are candidates.
 
 SAFETY: dry-run by default (lists what would be deleted). Pass --delete to remove.
 
@@ -12,7 +14,13 @@ SAFETY: dry-run by default (lists what would be deleted). Pass --delete to remov
 """
 import sys
 
-KEEP_PREFIXES = ("img/", "specs/", "admin/")
+# Active scraper sites (keep in sync with the scrapers' SITE constants).
+SITES = (
+    "budli", "cashify", "cellbuddy", "controlz", "easyphones", "gadgetrebirth",
+    "grest", "itradeit", "maplestore", "mobilegoo", "oldsold", "ovantica",
+    "refit", "sahivalue", "tetro", "thephonehub", "xtracover",
+)
+KEEP_PREFIXES = ("img/", "specs/", "admin/", "logos/") + tuple(f"{s}/" for s in SITES)
 
 
 def _iter_keys(client, bucket):
@@ -37,7 +45,7 @@ def main(delete=False):
         return
     todelete = [k for k in _iter_keys(client, R2_BUCKET)
                 if not k.startswith(KEEP_PREFIXES)]
-    print(f"{len(todelete)} objects outside img/ and admin/ (sample):")
+    print(f"{len(todelete)} objects outside the kept prefixes (sample):")
     for k in todelete[:25]:
         print("   ", k)
     if not delete:

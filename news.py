@@ -461,7 +461,7 @@ def run(dry=False):
             record_articles(supabase, _exec, cluster, post["id"])
             recent_posts.insert(0, {"id": post["id"], "slug": slug,
                                     "title": result["title"], "sources": post["sources"]})
-            print(f"  PUBLISHED /blog/{slug}  ({len(cluster)} source(s))")
+            print(f"  PUBLISHED /phone-news/{slug}  ({len(cluster)} source(s))")
         except Exception as e:
             log_error(e, stage="cluster", cluster=titles[:120])
             print(f"  cluster failed (will retry next run): {titles}: {e}")
@@ -474,10 +474,48 @@ def record_articles(supabase, _exec, cluster, post_id):
     _exec(lambda: supabase.table("news_articles").upsert(rows, on_conflict="url").execute())
 
 
+def backfill_images():
+    """One-off (run via `python3 news.py --backfill-images`): fill image_url for
+    already-published posts that have none, using their stored sources' lead
+    (og:image) image. Posts only get an image at insert time, so this is how the
+    posts published before source images were wired get one."""
+    from db import supabase, _exec
+
+    posts = _exec(lambda: supabase.table("blog_posts")
+                  .select("id, slug, sources").is_("image_url", "null")
+                  .order("created_at", desc=True).execute()).data
+    print(f"{len(posts)} post(s) without an image")
+    filled = 0
+    for p in posts:
+        image = credit = credit_url = None
+        for s in (p.get("sources") or []):
+            url = s.get("url")
+            if not url:
+                continue
+            _, img = fetch_article(url)
+            if img:
+                image, credit, credit_url = host_source_image(
+                    img, s.get("domain"), url, p["slug"])
+                break
+            time.sleep(1)
+        if image:
+            _exec(lambda: supabase.table("blog_posts").update({
+                "image_url": image, "image_credit": credit, "image_credit_url": credit_url,
+            }).eq("id", p["id"]).execute())
+            filled += 1
+            print(f"  set image for /phone-news/{p['slug']}")
+        else:
+            print(f"  no source image found for /phone-news/{p['slug']}")
+    print(f"done: {filled}/{len(posts)} filled")
+
+
 if __name__ == "__main__":
     init_sentry("news")
     try:
-        run(dry="--dry" in sys.argv)
+        if "--backfill-images" in sys.argv:
+            backfill_images()
+        else:
+            run(dry="--dry" in sys.argv)
     except Exception as exc:
         log_error(exc)
         raise

@@ -5,6 +5,12 @@ on:
     # Every 6 hours (best-effort; GitHub cron is often delayed).
     - cron: "30 1,7,13,19 * * *"
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "normal = write new posts; backfill-images = fill images on existing posts"
+        type: choice
+        default: normal
+        options: [normal, backfill-images]
 
 jobs:
   news:
@@ -28,4 +34,4 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install requests supabase python-dotenv sentry-sdk boto3 anthropic trafilatura
-      - run: python3 news.py
+      - run: python3 news.py ${{ inputs.mode == 'backfill-images' && '--backfill-images' || '' }}

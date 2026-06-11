@@ -170,11 +170,35 @@ def fetch_article(url):
         return None, None
 
 
+# ── Relevance (skip non-phone stories) ───────────────────────────────────────
+
+PHONE_HINTS = re.compile(
+    r"\b(phones?|smartphones?|handsets?|iphones?|ipad|android|ios|ipados|harmonyos|"
+    r"galaxy|pixel|oneplus|nothing\s+phone|xiaomi|redmi|poco|realme|oppo|vivo|iqoo|"
+    r"motorola|moto\s|nokia|infinix|tecno|honor|huawei|samsung|apple|"
+    r"snapdragon|mediatek|dimensity|exynos|tensor|amoled|oled|mah|foldables?|"
+    r"5g|refurbished|mobile)\b", re.I)
+
+
+def looks_phone_related(text):
+    """Cheap pre-filter before spending a Claude call: does the text mention
+    phones at all? Deliberately PERMISSIVE — it only skips clusters with zero
+    phone signal; the writer model makes the real call (phone_related) on the
+    rest, since brand names alone aren't proof a story is about phones."""
+    return bool(PHONE_HINTS.search(text or ""))
+
+
 # ── Writing (Claude) ─────────────────────────────────────────────────────────
 
 WRITER_SCHEMA = {
     "type": "object",
     "properties": {
+        "phone_related": {
+            "type": "boolean",
+            "description": "True ONLY if the story is about phones, smartphones, "
+            "mobile tech, or the phone industry/market. False for anything else "
+            "(sports, politics, general tech, world news).",
+        },
         "duplicate_of": {
             "type": ["string", "null"],
             "description": "Slug of the existing post if this is the SAME story; else null.",
@@ -186,7 +210,7 @@ WRITER_SCHEMA = {
             "description": "2-4 word stock-photo search for a generic matching image.",
         },
     },
-    "required": ["duplicate_of", "title", "paragraphs", "image_query"],
+    "required": ["phone_related", "duplicate_of", "title", "paragraphs", "image_query"],
     "additionalProperties": False,
 }
 
@@ -204,6 +228,11 @@ SYSTEM_PROMPT = (
     "length. No corporate or press-release tone, no robotic phrasing.\n"
     "- NEVER use the em dash '—' or en dash '–' anywhere, in the title or the "
     "body. Use a comma, a period, or the word 'and' instead.\n"
+    "- RELEVANCE: WhatPhone ONLY covers phones, smartphones, mobile tech and "
+    "the phone industry. If the story is NOT about that (sports, politics, "
+    "general world/tech news), set phone_related to false and leave title and "
+    "paragraphs empty — we will skip it. Only set phone_related true for genuine "
+    "phone stories.\n"
     "- Stay factually accurate to the sources. Lead with the news, then "
     "details, then context. Mention India pricing/availability when the "
     "sources cover it.\n"
@@ -399,6 +428,16 @@ def run(dry=False):
                 print(f"  SKIP (no fetchable full text, will retry next run): {titles}")
                 continue
 
+            # 4b. Relevance pre-filter: a story with zero phone signal in its
+            #     titles+text never reaches the writer. Recorded so it isn't
+            #     reprocessed next run.
+            combined = titles + " " + " ".join(t for _, t in sources_text)
+            if not looks_phone_related(combined):
+                print(f"  SKIP (not phone-related): {titles}")
+                if not dry:
+                    record_articles(supabase, _exec, cluster, None)
+                continue
+
             if dry:
                 print(f"  CLUSTER ({len(cluster)} src, {len(sources_text)} fetched, "
                       f"image={'yes' if lead_image else 'no'}): {titles}")
@@ -406,6 +445,12 @@ def run(dry=False):
 
             # 5. Write.
             result = write_post(cluster, sources_text, recent_posts)
+
+            # 5b. The writer read the full articles — trust its relevance call.
+            if not result.get("phone_related", True):
+                print(f"  SKIP (writer flagged not phone-related): {titles}")
+                record_articles(supabase, _exec, cluster, None)
+                continue
 
             if result.get("duplicate_of"):
                 slug = result["duplicate_of"]

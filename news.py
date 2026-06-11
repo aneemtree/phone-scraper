@@ -20,14 +20,17 @@ Flow per run (news.yml cron):
      run (resurfaced via another outlet), the model returns duplicate_of=<slug>
      instead of an article — we then attach the new sources to that existing
      post rather than writing a second one.
-  6. A landscape stock photo is fetched from Pexels using the model's image
-     query, hosted on R2 at blog/<slug>.jpg (host_image), and credited.
+  6. The post's image is the SOURCE article's own lead image (og:image — the
+     publicity image outlets publish for sharing), hosted on R2 at
+     blog/<slug>.jpg (host_image) under our own name and credited to the
+     outlet. If no source exposes a lead image, falls back to a Pexels stock
+     photo (only when PEXELS_API_KEY is set).
   7. The post is inserted into blog_posts; its articles are recorded in
      news_articles with post_id.
 
 Env: SUPABASE_URL, SUPABASE_SERVICE_KEY (db.py), ANTHROPIC_API_KEY,
-     PEXELS_API_KEY (optional — posts go out imageless without it),
-     R2_* (optional — falls back to hotlinking the Pexels CDN URL).
+     R2_* (optional — without it the source image URL is hotlinked),
+     PEXELS_API_KEY (optional — only used as an image fallback).
 
 `python3 news.py --dry` runs steps 1-4 and prints the clusters with NO Claude /
 Pexels / DB writes (article fetches still happen).
@@ -39,7 +42,7 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
 
@@ -133,18 +136,38 @@ def cluster_articles(articles):
 
 # ── Full-article fetch ───────────────────────────────────────────────────────
 
-def fetch_article_text(url):
-    """Download the page and extract the main article text (trafilatura)."""
+def extract_lead_image(page_html, base_url):
+    """The article's social/lead image (og:image / twitter:image) — these are
+    the publicity images outlets put out for sharing. Returns an absolute URL
+    or None. Both meta attribute orders (property-then-content and the reverse)
+    are handled."""
+    for prop in ("og:image:secure_url", "og:image", "twitter:image:src", "twitter:image"):
+        p = re.escape(prop)
+        m = (re.search(r'<meta[^>]+(?:property|name)=["\']' + p +
+                       r'["\'][^>]+content=["\']([^"\']+)["\']', page_html, re.I)
+             or re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']'
+                          + p + r'["\']', page_html, re.I))
+        if m:
+            url = html.unescape(m.group(1)).strip()
+            if url and not url.lower().endswith(".svg"):
+                return urljoin(base_url, url)
+    return None
+
+
+def fetch_article(url):
+    """Download the page; return (main_text, lead_image_url). text is None when
+    extraction yields too little to write from; image may be None."""
     import trafilatura
     try:
         r = requests.get(url, timeout=25, headers={"User-Agent": UA})
         r.raise_for_status()
-        text = trafilatura.extract(r.text, include_comments=False,
-                                   include_tables=False) or ""
-        text = text.strip()
-        return text if len(text) >= MIN_ARTICLE_CHARS else None
+        text = (trafilatura.extract(r.text, include_comments=False,
+                                    include_tables=False) or "").strip()
+        if len(text) < MIN_ARTICLE_CHARS:
+            return None, None
+        return text, extract_lead_image(r.text, r.url)
     except Exception:
-        return None
+        return None, None
 
 
 # ── Writing (Claude) ─────────────────────────────────────────────────────────
@@ -235,11 +258,28 @@ def write_post(cluster, sources_text, recent_posts):
     return json.loads(text)
 
 
-# ── Image (Pexels -> R2) ─────────────────────────────────────────────────────
+# ── Image ────────────────────────────────────────────────────────────────────
+
+def host_source_image(image_src, source_domain, source_url, slug):
+    """Host the source article's lead image on R2 under our own name
+    (blog/<slug>.jpg) and credit the outlet. Returns (image_url, credit,
+    credit_url) or (None, None, None) when there's no usable image."""
+    if not image_src:
+        return None, None, None
+    try:
+        from db import host_image
+        hosted = host_image(image_src, f"blog/{slug}.jpg")
+        return (hosted or image_src), source_domain, source_url
+    except Exception as e:
+        log_error(e, stage="source_image")
+        # Without R2 creds, hotlink the source image as a last resort.
+        return image_src, source_domain, source_url
+
 
 def fetch_image(query, slug):
-    """Search Pexels, host the photo on R2 at blog/<slug>.jpg.
-    Returns (image_url, credit, credit_url) or (None, None, None)."""
+    """FALLBACK only (when a cluster's sources expose no lead image): search
+    Pexels and host the photo on R2 at blog/<slug>.jpg. Returns
+    (image_url, credit, credit_url) or (None, None, None)."""
     import os
     key = os.environ.get("PEXELS_API_KEY")
     if not key:
@@ -345,18 +385,23 @@ def run(dry=False):
         titles = " | ".join(a["title"][:70] for a in cluster[:3])
         try:
             # 4. Full article text — required; never write from snippets alone.
+            #    Also grab each source's lead (og:image) image for the post.
             sources_text = []
+            lead_image = lead_src = None
             for art in cluster:
-                text = fetch_article_text(art["url"])
+                text, img = fetch_article(art["url"])
                 if text:
                     sources_text.append((art, text))
+                if img and not lead_image:
+                    lead_image, lead_src = img, art
                 time.sleep(1)
             if not sources_text:
                 print(f"  SKIP (no fetchable full text, will retry next run): {titles}")
                 continue
 
             if dry:
-                print(f"  CLUSTER ({len(cluster)} src, {len(sources_text)} fetched): {titles}")
+                print(f"  CLUSTER ({len(cluster)} src, {len(sources_text)} fetched, "
+                      f"image={'yes' if lead_image else 'no'}): {titles}")
                 continue
 
             # 5. Write.
@@ -394,8 +439,13 @@ def run(dry=False):
 
             slug = unique_slug(supabase, _exec, slugify(result["title"]))
 
-            # 6. Image.
-            image_url, credit, credit_url = fetch_image(result["image_query"], slug)
+            # 6. Image: prefer the source article's own (public) image, hosted
+            #    on R2 under our name; fall back to a Pexels stock photo.
+            image_url, credit, credit_url = host_source_image(
+                lead_image, lead_src["source_domain"] if lead_src else None,
+                lead_src["url"] if lead_src else None, slug)
+            if not image_url:
+                image_url, credit, credit_url = fetch_image(result["image_query"], slug)
 
             # 7. Publish.
             post = _exec(lambda: supabase.table("blog_posts").insert({

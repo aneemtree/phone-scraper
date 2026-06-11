@@ -21,6 +21,7 @@ COLORS = [
     "yellow", "coral", "lavender", "cream", "mint",
     "natural", "natural titanium", "blue titanium", "white titanium",
     "black titanium", "desert titanium", "aurora", "phantom violet",
+    "dark matter", "hyperspace",
     "mystic", "celestial", "celatial",
     # Pixel / misc marketing colors that were leaking into model names.
     "porcelain", "obsidian", "hazel", "peony", "aloe", "lemongrass",

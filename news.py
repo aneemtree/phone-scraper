@@ -134,6 +134,62 @@ def cluster_articles(articles):
     return clusters
 
 
+# Generic phone words that are NOT model identifiers (so they don't anchor a
+# duplicate match). 5g/4g excluded from model codes too.
+_SIG_GENERIC = {
+    "pro", "plus", "max", "ultra", "lite", "neo", "india", "launch", "launched",
+    "lands", "land", "price", "battery", "display", "camera", "phone", "phones",
+    "series", "sale", "deal", "review", "specs", "under", "with", "gets",
+    "new", "amazon", "flipkart", "rs", "off", "now",
+}
+
+
+def model_sig(title):
+    """Distinctive model identifiers in a title: alphanumeric model codes
+    (p4r, g87, 6x, s25, z6) and brand+number bigrams (pova 8, narzo 80).
+    Used to detect the SAME phone across runs even when the framing differs."""
+    toks = re.findall(r"[a-z0-9]+", title.lower())  # keep single chars (model "8")
+    sig = set()
+    for w in toks:
+        if len(w) < 2 or w in ("5g", "4g") or re.fullmatch(r"\d+g", w):
+            continue
+        if re.search(r"[a-z]", w) and re.search(r"\d", w):  # mixed = model code
+            sig.add(w)
+    for a, b in zip(toks, toks[1:]):
+        if re.fullmatch(r"\d{1,4}", b) and a not in _SIG_GENERIC and a not in STOPWORDS and len(a) >= 3:
+            sig.add(f"{a} {b}")
+    return sig
+
+
+def _is_comparison(title):
+    return re.search(r"\bvs\b", title, re.I) is not None
+
+
+def find_recent_dup(cluster, recent_posts):
+    """Deterministic cross-run dedup: a recent post about the SAME phone model
+    (shared model_sig) with some title overlap is the same story. Returns the
+    matching post or None. Catches resurfaced stories the AI writer misses.
+    Comparison ("X vs Y") titles are left as their own story so a launch and a
+    head-to-head of the same phone aren't merged."""
+    csig = set()
+    for a in cluster:
+        csig |= model_sig(a["title"])
+    if not csig:
+        return None
+    ctitle = max((a["title"] for a in cluster), key=len)
+    if _is_comparison(ctitle):
+        return None
+    for p in recent_posts:
+        if _is_comparison(p["title"]):
+            continue
+        # Conservative: same model code AND high title overlap = same story.
+        # (Low overlap on the same model is often a different event -- price drop
+        # vs feature vs launch -- so leave those to the writer's semantic check.)
+        if csig & model_sig(p["title"]) and similar(ctitle, p["title"]) >= 0.55:
+            return p
+    return None
+
+
 # ── Full-article fetch ───────────────────────────────────────────────────────
 
 def extract_lead_image(page_html, base_url):
@@ -250,11 +306,16 @@ SYSTEM_PROMPT = (
     "- image_query: a 2-4 word stock photo search likely to match generic "
     "photos (e.g. 'samsung smartphone closeup', 'smartphone repair'), never "
     "model numbers that stock sites won't have.\n"
-    "- DUPLICATES: you are given the titles+slugs of recently published posts. "
-    "If the story you're given is substantially the same story as one of them "
-    "(same event, even if from different outlets), set duplicate_of to that "
-    "post's slug and leave the other fields minimal. Otherwise duplicate_of "
-    "must be null."
+    "- DUPLICATES (important): you are given the titles+slugs of recently "
+    "published posts. Set duplicate_of to a post's slug when your story covers "
+    "the SAME phone AND the SAME event as that post, even if the wording, angle, "
+    "or outlet is completely different. Examples that ARE duplicates: a launch "
+    "described as 'X launches in India' vs 'X's huge battery arrives' (same "
+    "launch); the same price drop reported twice. NOT duplicates (keep separate, "
+    "duplicate_of null): different events about the same phone -- a launch vs a "
+    "price drop vs a new feature vs a 'X vs Y' comparison. When in doubt and it "
+    "is clearly the same announcement of the same device, mark it a duplicate. "
+    "Leave the other fields minimal when duplicate_of is set."
 )
 
 
@@ -450,6 +511,15 @@ def run(dry=False):
                       f"image={'yes' if lead_image else 'no'}): {titles}")
                 continue
 
+            # 4c. Deterministic cross-run dedup: same phone model + title overlap
+            #     as a recent post = same story. Merge sources, skip writing (no
+            #     Claude call). Catches resurfaced stories the writer misses.
+            dup = find_recent_dup(cluster, recent_posts)
+            if dup:
+                attach_sources(supabase, _exec, dup, cluster)
+                print(f"  DUPLICATE of {dup['slug']} (model match) — sources attached: {titles}")
+                continue
+
             # 5. Write.
             result = write_post(cluster, sources_text, recent_posts)
 
@@ -463,19 +533,7 @@ def run(dry=False):
                 slug = result["duplicate_of"]
                 match = next((p for p in recent_posts if p["slug"] == slug), None)
                 if match:
-                    new_sources = (match.get("sources") or []) + [
-                        {"title": a["title"], "url": a["url"], "domain": a["source_domain"]}
-                        for a in cluster
-                    ]
-                    # de-dup sources by url
-                    dedup, su = [], set()
-                    for s in new_sources:
-                        if s["url"] not in su:
-                            su.add(s["url"]); dedup.append(s)
-                    _exec(lambda: supabase.table("blog_posts").update({
-                        "sources": dedup, "updated_at": datetime.now(timezone.utc).isoformat(),
-                    }).eq("id", match["id"]).execute())
-                    record_articles(supabase, _exec, cluster, match["id"])
+                    attach_sources(supabase, _exec, match, cluster)
                     print(f"  DUPLICATE of {slug} — sources attached: {titles}")
                 else:
                     record_articles(supabase, _exec, cluster, None)
@@ -517,6 +575,23 @@ def run(dry=False):
         except Exception as e:
             log_error(e, stage="cluster", cluster=titles[:120])
             print(f"  cluster failed (will retry next run): {titles}: {e}")
+
+
+def attach_sources(supabase, _exec, match, cluster):
+    """Merge a duplicate cluster's outlets into an existing post's sources
+    (deduped by url) and record its articles against that post."""
+    new_sources = (match.get("sources") or []) + [
+        {"title": a["title"], "url": a["url"], "domain": a["source_domain"]}
+        for a in cluster
+    ]
+    dedup, su = [], set()
+    for s in new_sources:
+        if s["url"] not in su:
+            su.add(s["url"]); dedup.append(s)
+    _exec(lambda: supabase.table("blog_posts").update({
+        "sources": dedup, "updated_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", match["id"]).execute())
+    record_articles(supabase, _exec, cluster, match["id"])
 
 
 def record_articles(supabase, _exec, cluster, post_id):

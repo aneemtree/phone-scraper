@@ -1,0 +1,44 @@
+name: Remove image backgrounds
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "sample = process a few for review; all = process every image"
+        type: choice
+        default: sample
+        options: [sample, all]
+      sample_size:
+        description: "How many images when mode=sample"
+        default: "12"
+      model:
+        description: "rembg model (isnet-general-use = best, u2netp = faster/smaller)"
+        type: choice
+        default: isnet-general-use
+        options: [isnet-general-use, u2netp, u2net]
+
+jobs:
+  removebg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
+      REMBG_MODEL: ${{ inputs.model }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install rembg[cpu] pillow onnxruntime boto3
+      - name: Run background removal
+        run: |
+          if [ "${{ inputs.mode }}" = "all" ]; then
+            python3 removebg.py --all
+          else
+            python3 removebg.py --sample ${{ inputs.sample_size }}
+          fi

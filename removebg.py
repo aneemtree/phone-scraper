@@ -130,6 +130,32 @@ def _alpha_stats(png_bytes):
     }
 
 
+def _fill_holes(png_bytes):
+    """The model erases light/glossy regions INSIDE the phone (screens,
+    reflections, white backs) that blend with a light background, punching
+    transparent holes in the subject. Fill any transparent region fully
+    enclosed by the subject (make it opaque) — rembg keeps the original RGB, so
+    this reveals the real screen/reflection pixels. FILL_HOLES env (default on)."""
+    if os.environ.get("FILL_HOLES", "1") not in ("1", "true", "True"):
+        return png_bytes
+    import io
+    import numpy as np
+    from PIL import Image
+    try:
+        from scipy import ndimage
+    except Exception:
+        return png_bytes
+    im = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+    arr = np.array(im)
+    mask = arr[..., 3] > 30
+    holes = ndimage.binary_fill_holes(mask) & ~mask
+    if holes.any():
+        arr[..., 3][holes] = 255
+    buf = io.BytesIO()
+    Image.fromarray(arr, "RGBA").save(buf, "PNG")
+    return buf.getvalue()
+
+
 def _boost_alpha(png_bytes):
     """ISNet/U2-Net return a SOFT mask, so glossy/dark phones come out partly
     see-through. MULTIPLY the alpha (clip to 255) so the translucent subject
@@ -169,6 +195,7 @@ def process_one(client, src_key, overwrite=False):
         if not out:
             return "empty", None
         raw_stats = _alpha_stats(out) if os.environ.get("INSPECT") else None
+        out = _fill_holes(out)
         out = _boost_alpha(out)
         if raw_stats is not None:
             print(f"  STATS {src_key}: raw={raw_stats} boosted={_alpha_stats(out)}")

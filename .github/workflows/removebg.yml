@@ -44,7 +44,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install rembg[cpu] pillow onnxruntime boto3
+      - run: pip install rembg[cpu] pillow onnxruntime boto3 scipy numpy
       - name: Run background removal
         run: |
           OW=""

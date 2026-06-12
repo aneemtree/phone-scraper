@@ -63,7 +63,7 @@ drop view if exists offers;
 create view offers as
  select coalesce(ph.canonical_key, ph.variant_key) as variant_key,
     ph.model, ph.storage, ph.ram, ph.site, ph.name, ph.url,
-    coalesce(sp.image_url, sp.image_fallback) as image_url,   -- Beebom primary, GSMArena fallback
+    coalesce(sp.image_url, sp.image_fallback, ph.image_url) as image_url,   -- Beebom primary, GSMArena fallback, store image last resort
     lp.price, lp.availability, lp.condition, lp.rating, lp.review_count,
     lp.warranty_days, lp.warranty_label, lp.url as condition_url,
     s.display_name as store_name, s.logo_url, s.default_warranty_days, s.trust_score,

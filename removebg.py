@@ -95,6 +95,25 @@ def dest_key(src_key):
     return f"nobg/{base}.png"
 
 
+def _harden_alpha(png_bytes):
+    """ISNet/U2-Net return a SOFT mask, so glossy/dark phones come out partly
+    see-through. Make the subject fully opaque (alpha >= threshold -> 255, below
+    -> 0) and keep a thin feather for edge anti-aliasing. ALPHA_THRESHOLD env
+    tunes it (default 40); set to 0 to keep the raw soft mask."""
+    import io
+    t = int(os.environ.get("ALPHA_THRESHOLD", "40"))
+    if t <= 0:
+        return png_bytes
+    from PIL import Image, ImageFilter
+    im = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+    a = im.getchannel("A").point(lambda v: 255 if v >= t else 0)
+    a = a.filter(ImageFilter.GaussianBlur(0.6))  # soften the hard edge a touch
+    im.putalpha(a)
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    return buf.getvalue()
+
+
 def process_one(client, src_key, overwrite=False):
     """Download src image from R2, remove background, upload transparent PNG.
     Returns (status, public_url): status in done|skip|empty|error."""
@@ -110,9 +129,10 @@ def process_one(client, src_key, overwrite=False):
         if not data:
             return "empty", None
         from rembg import remove
-        out = remove(data, session=_rembg_session())  # PNG bytes (RGBA)
+        out = remove(data, session=_rembg_session(), post_process_mask=True)  # PNG bytes (RGBA)
         if not out:
             return "empty", None
+        out = _harden_alpha(out)
         client.put_object(Bucket=R2_BUCKET, Key=dst, Body=out, ContentType="image/png")
         return "done", r2_public_url(dst)
     except Exception as e:

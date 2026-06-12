@@ -95,6 +95,25 @@ def dest_key(src_key):
     return f"nobg/{base}.png"
 
 
+def _downscale(img_bytes, max_dim):
+    """Shrink the input so its longest side is <= max_dim before inference.
+    BiRefNet at full resolution OOM-kills the 7GB runner; phone cards render
+    <=720px anyway, so ~1024 is ample. MAX_DIM env (0 = no downscale)."""
+    if max_dim <= 0:
+        return img_bytes
+    import io
+    from PIL import Image
+    im = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+    w, h = im.size
+    if max(w, h) <= max_dim:
+        return img_bytes
+    s = max_dim / max(w, h)
+    im = im.resize((max(1, int(w * s)), max(1, int(h * s))), Image.LANCZOS)
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    return buf.getvalue()
+
+
 def _harden_alpha(png_bytes):
     """ISNet/U2-Net return a SOFT mask, so glossy/dark phones come out partly
     see-through. Make the subject fully opaque (alpha >= threshold -> 255, below
@@ -128,6 +147,7 @@ def process_one(client, src_key, overwrite=False):
         data = client.get_object(Bucket=R2_BUCKET, Key=src_key)["Body"].read()
         if not data:
             return "empty", None
+        data = _downscale(data, int(os.environ.get("MAX_DIM", "1024")))
         from rembg import remove
         out = remove(data, session=_rembg_session(), post_process_mask=True)  # PNG bytes (RGBA)
         if not out:

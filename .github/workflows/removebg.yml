@@ -11,8 +11,16 @@ on:
       sample_size:
         description: "How many images when mode=sample"
         default: "12"
+      method:
+        description: "flood = uniform-bg flood removal (default, keeps subject); rembg = ML matting"
+        type: choice
+        default: flood
+        options: [flood, rembg]
+      flood_tol:
+        description: "Flood colour tolerance vs background (higher = removes more; 32 default)"
+        default: "32"
       model:
-        description: "rembg model (isnet-general-use = best, u2netp = faster/smaller)"
+        description: "rembg model (only when method=rembg)"
         type: choice
         default: isnet-general-use
         options: [isnet-general-use, u2netp, u2net, birefnet-general-lite]
@@ -34,6 +42,8 @@ jobs:
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
       R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
+      METHOD: ${{ inputs.method }}
+      FLOOD_TOL: ${{ inputs.flood_tol }}
       REMBG_MODEL: ${{ inputs.model }}
       ALPHA_GAIN: ${{ inputs.alpha_gain }}
       MAX_DIM: "1024"

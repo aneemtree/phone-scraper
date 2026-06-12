@@ -130,6 +130,40 @@ def _alpha_stats(png_bytes):
     }
 
 
+def _flood_remove(img_bytes, tol):
+    """Remove a UNIFORM (near-white/grey) studio background by flooding inward
+    from the borders: a pixel is background only if it's within `tol` of the
+    corner colour AND connected to the edge. Interior light areas (screen,
+    reflections) are enclosed by the phone body, so the flood never reaches them
+    -> the subject stays intact, no holes. No ML model, no OOM. FLOOD_TOL env."""
+    import io
+    import numpy as np
+    from PIL import Image, ImageFilter
+    from scipy import ndimage
+
+    im = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+    arr = np.asarray(im).astype(np.int16)
+    h, w, _ = arr.shape
+    c = max(8, min(h, w) // 40)
+    corners = np.concatenate([
+        arr[:c, :c].reshape(-1, 3), arr[:c, -c:].reshape(-1, 3),
+        arr[-c:, :c].reshape(-1, 3), arr[-c:, -c:].reshape(-1, 3),
+    ])
+    bg = np.median(corners, axis=0)
+    near_bg = np.abs(arr - bg).max(axis=2) <= tol     # colour close to background
+    lbl, _n = ndimage.label(near_bg)
+    border = set(lbl[0, :]) | set(lbl[-1, :]) | set(lbl[:, 0]) | set(lbl[:, -1])
+    border.discard(0)
+    bgmask = np.isin(lbl, list(border))               # near-bg AND edge-connected
+    alpha = np.where(bgmask, 0, 255).astype(np.uint8)
+    A = Image.fromarray(alpha, "L").filter(ImageFilter.GaussianBlur(0.6))  # soft edge
+    out = im.convert("RGBA")
+    out.putalpha(A)
+    buf = io.BytesIO()
+    out.save(buf, "PNG")
+    return buf.getvalue()
+
+
 def _fill_holes(png_bytes):
     """The model erases light/glossy regions INSIDE the phone (screens,
     reflections, white backs) that blend with a light background, punching
@@ -190,15 +224,20 @@ def process_one(client, src_key, overwrite=False):
         if not data:
             return "empty", None
         data = _downscale(data, int(os.environ.get("MAX_DIM", "1024")))
-        from rembg import remove
-        out = remove(data, session=_rembg_session(), post_process_mask=True)  # PNG bytes (RGBA)
-        if not out:
-            return "empty", None
-        raw_stats = _alpha_stats(out) if os.environ.get("INSPECT") else None
-        out = _fill_holes(out)
-        out = _boost_alpha(out)
-        if raw_stats is not None:
-            print(f"  STATS {src_key}: raw={raw_stats} boosted={_alpha_stats(out)}")
+        method = os.environ.get("METHOD", "flood")
+        if method == "flood":
+            # Uniform-background flood removal (default): keeps the subject intact.
+            out = _flood_remove(data, int(os.environ.get("FLOOD_TOL", "32")))
+        else:
+            # ML matting (rembg) — for non-uniform backgrounds.
+            from rembg import remove
+            out = remove(data, session=_rembg_session(), post_process_mask=True)
+            if not out:
+                return "empty", None
+            out = _fill_holes(out)
+            out = _boost_alpha(out)
+        if os.environ.get("INSPECT"):
+            print(f"  STATS {src_key} ({method}): {_alpha_stats(out)}")
         client.put_object(Bucket=R2_BUCKET, Key=dst, Body=out, ContentType="image/png")
         return "done", r2_public_url(dst)
     except Exception as e:

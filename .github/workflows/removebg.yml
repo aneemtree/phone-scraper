@@ -37,6 +37,7 @@ jobs:
       REMBG_MODEL: ${{ inputs.model }}
       ALPHA_GAIN: ${{ inputs.alpha_gain }}
       MAX_DIM: "1024"
+      INSPECT: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

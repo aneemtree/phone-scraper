@@ -114,6 +114,22 @@ def _downscale(img_bytes, max_dim):
     return buf.getvalue()
 
 
+def _alpha_stats(png_bytes):
+    """Alpha histogram buckets, to diagnose cutouts without viewing pixels.
+    opaque = subject kept solid; mid = translucent (bad); clear = background."""
+    import io
+    from PIL import Image
+    a = Image.open(io.BytesIO(png_bytes)).convert("RGBA").getchannel("A")
+    h = a.histogram()
+    tot = sum(h) or 1
+    return {
+        "clear%": round(100 * h[0] / tot),
+        "low%": round(100 * sum(h[1:50]) / tot),
+        "mid%": round(100 * sum(h[50:205]) / tot),
+        "opaque%": round(100 * sum(h[205:]) / tot),
+    }
+
+
 def _boost_alpha(png_bytes):
     """ISNet/U2-Net return a SOFT mask, so glossy/dark phones come out partly
     see-through. MULTIPLY the alpha (clip to 255) so the translucent subject
@@ -152,7 +168,10 @@ def process_one(client, src_key, overwrite=False):
         out = remove(data, session=_rembg_session(), post_process_mask=True)  # PNG bytes (RGBA)
         if not out:
             return "empty", None
+        raw_stats = _alpha_stats(out) if os.environ.get("INSPECT") else None
         out = _boost_alpha(out)
+        if raw_stats is not None:
+            print(f"  STATS {src_key}: raw={raw_stats} boosted={_alpha_stats(out)}")
         client.put_object(Bucket=R2_BUCKET, Key=dst, Body=out, ContentType="image/png")
         return "done", r2_public_url(dst)
     except Exception as e:

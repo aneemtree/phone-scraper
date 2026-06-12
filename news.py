@@ -134,60 +134,60 @@ def cluster_articles(articles):
     return clusters
 
 
-# Generic phone words that are NOT model identifiers (so they don't anchor a
-# duplicate match). 5g/4g excluded from model codes too.
-_SIG_GENERIC = {
-    "pro", "plus", "max", "ultra", "lite", "neo", "india", "launch", "launched",
-    "lands", "land", "price", "battery", "display", "camera", "phone", "phones",
-    "series", "sale", "deal", "review", "specs", "under", "with", "gets",
-    "new", "amazon", "flipkart", "rs", "off", "now",
+# ── Cross-run dedup (semantic, Sonnet) ───────────────────────────────────────
+
+DEDUP_MODEL = "claude-sonnet-4-6"   # stronger model for the same-event judgment
+
+DEDUP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "duplicate_of": {
+            "type": ["string", "null"],
+            "description": "Slug of the recent post this story duplicates, or null.",
+        },
+        "reason": {"type": "string"},
+    },
+    "required": ["duplicate_of", "reason"],
+    "additionalProperties": False,
 }
 
-
-def model_sig(title):
-    """Distinctive model identifiers in a title: alphanumeric model codes
-    (p4r, g87, 6x, s25, z6) and brand+number bigrams (pova 8, narzo 80).
-    Used to detect the SAME phone across runs even when the framing differs."""
-    toks = re.findall(r"[a-z0-9]+", title.lower())  # keep single chars (model "8")
-    sig = set()
-    for w in toks:
-        if len(w) < 2 or w in ("5g", "4g") or re.fullmatch(r"\d+g", w):
-            continue
-        if re.search(r"[a-z]", w) and re.search(r"\d", w):  # mixed = model code
-            sig.add(w)
-    for a, b in zip(toks, toks[1:]):
-        if re.fullmatch(r"\d{1,4}", b) and a not in _SIG_GENERIC and a not in STOPWORDS and len(a) >= 3:
-            sig.add(f"{a} {b}")
-    return sig
+DEDUP_SYSTEM = (
+    "You deduplicate phone-news before publishing. Decide if a NEW story is the "
+    "SAME story as one already published.\n"
+    "DUPLICATE = the same phone(s) AND the same event/announcement (a launch, a "
+    "price drop or sale, a leak/rumor, a specific feature rollout), even if the "
+    "headline wording, angle, or outlet is completely different.\n"
+    "NOT a duplicate (return null): a DIFFERENT event about the same phone (e.g. "
+    "its launch vs a later price cut vs a new feature vs a deal), a roundup vs a "
+    "single device, or an 'X vs Y' comparison vs a single-phone story.\n"
+    "Only return a slug from the list you are given; if unsure, return null."
+)
 
 
-def _is_comparison(title):
-    return re.search(r"\bvs\b", title, re.I) is not None
-
-
-def find_recent_dup(cluster, recent_posts):
-    """Deterministic cross-run dedup: a recent post about the SAME phone model
-    (shared model_sig) with some title overlap is the same story. Returns the
-    matching post or None. Catches resurfaced stories the AI writer misses.
-    Comparison ("X vs Y") titles are left as their own story so a launch and a
-    head-to-head of the same phone aren't merged."""
-    csig = set()
-    for a in cluster:
-        csig |= model_sig(a["title"])
-    if not csig:
+def dedupe_decision(new_title, new_text, recent_posts):
+    """Ask Sonnet whether this story duplicates a recent post (same phone + same
+    event). Returns the matching slug or None. Best-effort: any error -> None."""
+    if not recent_posts:
         return None
-    ctitle = max((a["title"] for a in cluster), key=len)
-    if _is_comparison(ctitle):
-        return None
+    import anthropic
+    lines = []
     for p in recent_posts:
-        if _is_comparison(p["title"]):
-            continue
-        # Conservative: same model code AND high title overlap = same story.
-        # (Low overlap on the same model is often a different event -- price drop
-        # vs feature vs launch -- so leave those to the writer's semantic check.)
-        if csig & model_sig(p["title"]) and similar(ctitle, p["title"]) >= 0.55:
-            return p
-    return None
+        snip = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", p.get("body_html") or "")).strip()[:200]
+        lines.append(f"- slug: {p['slug']}\n  title: {p['title']}\n  summary: {snip}")
+    user = (
+        f"NEW STORY:\nTitle: {new_title}\nText: {new_text[:2000]}\n\n"
+        f"RECENTLY PUBLISHED POSTS:\n" + "\n".join(lines) + "\n\n"
+        "Does the NEW STORY duplicate one of the recent posts (same phone AND "
+        "same event)? Return its slug as duplicate_of, else null."
+    )
+    resp = anthropic.Anthropic().messages.create(
+        model=DEDUP_MODEL, max_tokens=300, system=DEDUP_SYSTEM,
+        messages=[{"role": "user", "content": user}],
+        output_config={"format": {"type": "json_schema", "schema": DEDUP_SCHEMA}},
+    )
+    text = next(b.text for b in resp.content if b.type == "text")
+    slug = json.loads(text).get("duplicate_of")
+    return slug or None
 
 
 # ── Full-article fetch ───────────────────────────────────────────────────────
@@ -474,7 +474,7 @@ def run(dry=False):
     # Recent posts (for the duplicate check inside the writer prompt).
     since = (datetime.now(timezone.utc) - timedelta(days=RECENT_POST_DAYS)).isoformat()
     recent_posts = _exec(lambda: supabase.table("blog_posts")
-                         .select("id, slug, title, sources")
+                         .select("id, slug, title, sources, body_html")
                          .gte("created_at", since)
                          .order("created_at", desc=True).limit(60).execute()).data
 
@@ -511,13 +511,20 @@ def run(dry=False):
                       f"image={'yes' if lead_image else 'no'}): {titles}")
                 continue
 
-            # 4c. Deterministic cross-run dedup: same phone model + title overlap
-            #     as a recent post = same story. Merge sources, skip writing (no
-            #     Claude call). Catches resurfaced stories the writer misses.
-            dup = find_recent_dup(cluster, recent_posts)
+            # 4c. Semantic cross-run dedup (Sonnet): same phone + same event as a
+            #     recent post = duplicate. Merge sources, skip writing.
+            dup = None
+            try:
+                ctitle = max((a["title"] for a in cluster), key=len)
+                ctext = " ".join(t for _, t in sources_text)
+                dslug = dedupe_decision(ctitle, ctext, recent_posts)
+                if dslug:
+                    dup = next((p for p in recent_posts if p["slug"] == dslug), None)
+            except Exception as e:
+                log_error(e, stage="dedupe")
             if dup:
                 attach_sources(supabase, _exec, dup, cluster)
-                print(f"  DUPLICATE of {dup['slug']} (model match) — sources attached: {titles}")
+                print(f"  DUPLICATE of {dup['slug']} (same event) — sources attached: {titles}")
                 continue
 
             # 5. Write.

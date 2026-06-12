@@ -155,11 +155,12 @@ def _flood_bgmask(img_bytes, tol):
 
 
 def _combo_remove(img_bytes, tol):
-    """Best-of-both background removal: a pixel is removed ONLY when both the
-    ML matting (ISNet, holes filled) and the border-connected flood agree it's
-    background. ML catches gradients/decorative backdrops the flood can't;
-    the flood + hole-fill protect subject regions the ML wrongly erases
-    (screens, reflections, white/black panels). Keep if EITHER says subject."""
+    """Confident cutout, or skip. Compute the ML-matting subject (ISNet, holes
+    filled) and the flood subject (everything not edge-connected background).
+    If they STRONGLY AGREE (IoU high) the image is a clean phone on a uniform
+    backdrop -> emit the cutout. If they disagree (composite promo image, light
+    phone on gradient, etc.) -> return None so we DON'T replace it and the UI
+    keeps the original. MIN_IOU env (default 0.85)."""
     import io
     import numpy as np
     from PIL import Image, ImageFilter
@@ -167,12 +168,21 @@ def _combo_remove(img_bytes, tol):
     from rembg import remove
 
     ml_png = remove(img_bytes, session=_rembg_session(), post_process_mask=True)
-    ml_alpha = np.array(Image.open(io.BytesIO(ml_png)).convert("RGBA"))[..., 3]
-    ml_subject = ndimage.binary_fill_holes(ml_alpha > 30)
+    ml_subject = ndimage.binary_fill_holes(
+        np.array(Image.open(io.BytesIO(ml_png)).convert("RGBA"))[..., 3] > 30)
 
     im, flood_bg = _flood_bgmask(img_bytes, tol)
-    bg = flood_bg & ~ml_subject          # both must call it background
-    alpha = np.where(bg, 0, 255).astype(np.uint8)
+    flood_subject = ~flood_bg
+
+    inter = np.logical_and(ml_subject, flood_subject).sum()
+    union = np.logical_or(ml_subject, flood_subject).sum() or 1
+    iou = inter / union
+    frac = ml_subject.mean()
+    min_iou = float(os.environ.get("MIN_IOU", "0.85"))
+    if iou < min_iou or frac < 0.05 or frac > 0.97:
+        return None  # not confident -> keep the original image
+
+    alpha = np.where(ml_subject, 255, 0).astype(np.uint8)
     A = Image.fromarray(alpha, "L").filter(ImageFilter.GaussianBlur(0.6))
     out = im.convert("RGBA")
     out.putalpha(A)
@@ -277,8 +287,14 @@ def process_one(client, src_key, overwrite=False):
         data = _downscale(data, int(os.environ.get("MAX_DIM", "1024")))
         method = os.environ.get("METHOD", "combo")
         if method == "combo":
-            # Default: remove only where ML matting AND flood agree it's background.
-            out = _combo_remove(data, int(os.environ.get("FLOOD_TOL", "72")))
+            # Confident-only: emit a cutout when ML + flood agree, else skip.
+            out = _combo_remove(data, int(os.environ.get("FLOOD_TOL", "40")))
+            if out is None:
+                try:  # drop any stale cutout from a previous run
+                    client.delete_object(Bucket=R2_BUCKET, Key=dst)
+                except Exception:
+                    pass
+                return "lowconf", None     # leave original; UI falls back
         elif method == "flood":
             # Uniform-background flood removal only (no ML).
             out = _flood_remove(data, int(os.environ.get("FLOOD_TOL", "32")))
@@ -311,7 +327,7 @@ def run(sample=None, overwrite=False):
         keys = random.sample(keys, min(sample, len(keys)))
         print(f"processing a sample of {len(keys)}")
 
-    counts = {"done": 0, "skip": 0, "empty": 0, "error": 0}
+    counts = {"done": 0, "skip": 0, "lowconf": 0, "empty": 0, "error": 0}
     urls = []
     for i, k in enumerate(keys, 1):
         status, url = process_one(client, k, overwrite=overwrite)

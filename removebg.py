@@ -130,6 +130,57 @@ def _alpha_stats(png_bytes):
     }
 
 
+def _flood_bgmask(img_bytes, tol):
+    """Boolean background mask for a UNIFORM-ish backdrop: near the corner
+    colour AND connected to the border. Returns (PIL.Image RGB, ndarray mask)."""
+    import io
+    import numpy as np
+    from PIL import Image
+    from scipy import ndimage
+
+    im = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+    arr = np.asarray(im).astype(np.int16)
+    h, w, _ = arr.shape
+    c = max(8, min(h, w) // 40)
+    corners = np.concatenate([
+        arr[:c, :c].reshape(-1, 3), arr[:c, -c:].reshape(-1, 3),
+        arr[-c:, :c].reshape(-1, 3), arr[-c:, -c:].reshape(-1, 3),
+    ])
+    bg = np.median(corners, axis=0)
+    near_bg = np.abs(arr - bg).max(axis=2) <= tol
+    lbl, _n = ndimage.label(near_bg)
+    border = set(lbl[0, :]) | set(lbl[-1, :]) | set(lbl[:, 0]) | set(lbl[:, -1])
+    border.discard(0)
+    return im, np.isin(lbl, list(border))
+
+
+def _combo_remove(img_bytes, tol):
+    """Best-of-both background removal: a pixel is removed ONLY when both the
+    ML matting (ISNet, holes filled) and the border-connected flood agree it's
+    background. ML catches gradients/decorative backdrops the flood can't;
+    the flood + hole-fill protect subject regions the ML wrongly erases
+    (screens, reflections, white/black panels). Keep if EITHER says subject."""
+    import io
+    import numpy as np
+    from PIL import Image, ImageFilter
+    from scipy import ndimage
+    from rembg import remove
+
+    ml_png = remove(img_bytes, session=_rembg_session(), post_process_mask=True)
+    ml_alpha = np.array(Image.open(io.BytesIO(ml_png)).convert("RGBA"))[..., 3]
+    ml_subject = ndimage.binary_fill_holes(ml_alpha > 30)
+
+    im, flood_bg = _flood_bgmask(img_bytes, tol)
+    bg = flood_bg & ~ml_subject          # both must call it background
+    alpha = np.where(bg, 0, 255).astype(np.uint8)
+    A = Image.fromarray(alpha, "L").filter(ImageFilter.GaussianBlur(0.6))
+    out = im.convert("RGBA")
+    out.putalpha(A)
+    buf = io.BytesIO()
+    out.save(buf, "PNG")
+    return buf.getvalue()
+
+
 def _flood_remove(img_bytes, tol):
     """Remove a UNIFORM (near-white/grey) studio background by flooding inward
     from the borders: a pixel is background only if it's within `tol` of the
@@ -224,9 +275,12 @@ def process_one(client, src_key, overwrite=False):
         if not data:
             return "empty", None
         data = _downscale(data, int(os.environ.get("MAX_DIM", "1024")))
-        method = os.environ.get("METHOD", "flood")
-        if method == "flood":
-            # Uniform-background flood removal (default): keeps the subject intact.
+        method = os.environ.get("METHOD", "combo")
+        if method == "combo":
+            # Default: remove only where ML matting AND flood agree it's background.
+            out = _combo_remove(data, int(os.environ.get("FLOOD_TOL", "72")))
+        elif method == "flood":
+            # Uniform-background flood removal only (no ML).
             out = _flood_remove(data, int(os.environ.get("FLOOD_TOL", "32")))
         else:
             # ML matting (rembg) — for non-uniform backgrounds.

@@ -12,13 +12,13 @@ on:
         description: "How many images when mode=sample"
         default: "12"
       method:
-        description: "flood = uniform-bg flood removal (default, keeps subject); rembg = ML matting"
+        description: "combo = remove only where ML AND flood agree (default); flood / rembg alone"
         type: choice
-        default: flood
-        options: [flood, rembg]
+        default: combo
+        options: [combo, flood, rembg]
       flood_tol:
-        description: "Flood colour tolerance vs background (higher = removes more; 32 default)"
-        default: "32"
+        description: "Flood colour tolerance vs background (combo default 72, flood 32)"
+        default: "72"
       model:
         description: "rembg model (only when method=rembg)"
         type: choice

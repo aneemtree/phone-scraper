@@ -23,13 +23,40 @@ import os
 import random
 import sys
 
-import db  # reuse the scrapers' R2 client + helpers
-
 IMG_EXTS = (".jpg", ".jpeg", ".png", ".webp")
 SKIP_PREFIXES = ("logos/", "blog/", "nobg/")  # not phone product shots
 MODEL = os.environ.get("REMBG_MODEL", "isnet-general-use")
 
+# R2 config (same env as the scrapers). Self-contained — does NOT import db.py
+# so it pulls no scraper deps (httpx/supabase/etc.), only boto3 + rembg.
+R2_ACCOUNT_ID = os.environ.get("R2_ACCOUNT_ID")
+R2_ACCESS_KEY_ID = os.environ.get("R2_ACCESS_KEY_ID")
+R2_SECRET_ACCESS_KEY = os.environ.get("R2_SECRET_ACCESS_KEY")
+R2_BUCKET = os.environ.get("R2_BUCKET", "phone-images")
+R2_PUBLIC_BASE_URL = (os.environ.get("R2_PUBLIC_BASE_URL") or "").rstrip("/")
+
 _session = None
+_client = None
+
+
+def _r2():
+    global _client
+    if not (R2_ACCOUNT_ID and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_PUBLIC_BASE_URL):
+        return None
+    if _client is None:
+        import boto3
+        _client = boto3.client(
+            "s3",
+            endpoint_url=f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+            aws_access_key_id=R2_ACCESS_KEY_ID,
+            aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+            region_name="auto",
+        )
+    return _client
+
+
+def r2_public_url(key):
+    return f"{R2_PUBLIC_BASE_URL}/{key}"
 
 
 def _rembg_session():
@@ -46,7 +73,7 @@ def list_source_keys(client):
     keys = []
     token = None
     while True:
-        kw = {"Bucket": db.R2_BUCKET, "MaxKeys": 1000}
+        kw = {"Bucket": R2_BUCKET, "MaxKeys": 1000}
         if token:
             kw["ContinuationToken"] = token
         resp = client.list_objects_v2(**kw)
@@ -74,27 +101,27 @@ def process_one(client, src_key, overwrite=False):
     dst = dest_key(src_key)
     if not overwrite:
         try:
-            client.head_object(Bucket=db.R2_BUCKET, Key=dst)
-            return "skip", db.r2_public_url(dst)
+            client.head_object(Bucket=R2_BUCKET, Key=dst)
+            return "skip", r2_public_url(dst)
         except Exception:
             pass
     try:
-        data = client.get_object(Bucket=db.R2_BUCKET, Key=src_key)["Body"].read()
+        data = client.get_object(Bucket=R2_BUCKET, Key=src_key)["Body"].read()
         if not data:
             return "empty", None
         from rembg import remove
         out = remove(data, session=_rembg_session())  # PNG bytes (RGBA)
         if not out:
             return "empty", None
-        client.put_object(Bucket=db.R2_BUCKET, Key=dst, Body=out, ContentType="image/png")
-        return "done", db.r2_public_url(dst)
+        client.put_object(Bucket=R2_BUCKET, Key=dst, Body=out, ContentType="image/png")
+        return "done", r2_public_url(dst)
     except Exception as e:
         print(f"  ERROR {src_key}: {e}")
         return "error", None
 
 
 def run(sample=None, overwrite=False):
-    client = db._r2()
+    client = _r2()
     if client is None:
         print("R2 not configured (need R2_* env). Aborting.")
         return

@@ -114,19 +114,19 @@ def _downscale(img_bytes, max_dim):
     return buf.getvalue()
 
 
-def _harden_alpha(png_bytes):
+def _boost_alpha(png_bytes):
     """ISNet/U2-Net return a SOFT mask, so glossy/dark phones come out partly
-    see-through. Make the subject fully opaque (alpha >= threshold -> 255, below
-    -> 0) and keep a thin feather for edge anti-aliasing. ALPHA_THRESHOLD env
-    tunes it (default 40); set to 0 to keep the raw soft mask."""
+    see-through. MULTIPLY the alpha (clip to 255) so the translucent subject
+    becomes opaque while fully-transparent background stays 0 and edge
+    anti-aliasing is preserved. This does NOT erase faint subject pixels the way
+    a hard threshold did. ALPHA_GAIN env (default 3; <=1 = raw mask)."""
     import io
-    t = int(os.environ.get("ALPHA_THRESHOLD", "40"))
-    if t <= 0:
+    g = float(os.environ.get("ALPHA_GAIN", "3"))
+    if g <= 1:
         return png_bytes
-    from PIL import Image, ImageFilter
+    from PIL import Image
     im = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
-    a = im.getchannel("A").point(lambda v: 255 if v >= t else 0)
-    a = a.filter(ImageFilter.GaussianBlur(0.6))  # soften the hard edge a touch
+    a = im.getchannel("A").point(lambda v: min(255, int(v * g)))
     im.putalpha(a)
     buf = io.BytesIO()
     im.save(buf, "PNG")
@@ -152,7 +152,7 @@ def process_one(client, src_key, overwrite=False):
         out = remove(data, session=_rembg_session(), post_process_mask=True)  # PNG bytes (RGBA)
         if not out:
             return "empty", None
-        out = _harden_alpha(out)
+        out = _boost_alpha(out)
         client.put_object(Bucket=R2_BUCKET, Key=dst, Body=out, ContentType="image/png")
         return "done", r2_public_url(dst)
     except Exception as e:

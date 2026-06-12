@@ -16,9 +16,9 @@ on:
         type: choice
         default: isnet-general-use
         options: [isnet-general-use, u2netp, u2net, birefnet-general-lite]
-      alpha_threshold:
-        description: "Alpha hardening cutoff (0 = raw soft mask; 40 default; higher = crisper/harsher)"
-        default: "40"
+      alpha_gain:
+        description: "Multiply alpha so soft subject goes opaque (1 = raw; 3 default)"
+        default: "3"
       overwrite:
         description: "Reprocess images already in nobg/ (for re-sampling tweaks)"
         type: boolean
@@ -35,7 +35,7 @@ jobs:
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
       R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
       REMBG_MODEL: ${{ inputs.model }}
-      ALPHA_THRESHOLD: ${{ inputs.alpha_threshold }}
+      ALPHA_GAIN: ${{ inputs.alpha_gain }}
       MAX_DIM: "1024"
     steps:
       - uses: actions/checkout@v4

@@ -212,6 +212,17 @@ R2_PUBLIC_BASE_URL. Phones with no canonical image surface in the
 (gsmarena.set_image / `python3 gsmarena.py --set-image "<model>" <url>`).
 The DB stays on Supabase.
 
+BACKGROUND REMOVAL (free, self-hosted): removebg.py uses `rembg` (U2-Net/ISNet
+ONNX, CPU — no paid API) to cut the background from the hosted phone images and
+write a transparent PNG to a SEPARATE `nobg/<key>.png` prefix. Originals, DB,
+and the web UI are UNTOUCHED (review-first) — wiring the UI/offers view to prefer
+`nobg/` is a later step once cutouts look good. Self-contained R2 client (no db
+import, so no scraper deps; just boto3 + rembg). Workflow `removebg.yml`
+(workflow_dispatch: mode sample|all, model isnet-general-use/u2netp, sample size).
+`python3 removebg.py --sample 15` prints review URLs; `--all` processes every
+image (skips ones already in nobg/). cleanup_r2_images.py keeps `nobg/`. REMBG_MODEL
+env overrides the model.
+
 ### GSMArena specs & canonical images (gsmarena.py)
 Enriches each phone MODEL with a spec sheet and a canonical product image from
 GSMArena. Specs/image are per-MODEL (display, chipset, camera, image are identical

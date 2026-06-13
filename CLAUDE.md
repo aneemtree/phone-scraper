@@ -515,8 +515,10 @@ Claude-written ORIGINAL posts with the SOURCE article's own image -> Supabase
     BEFORE the Claude call; (2) the writer returns phone_related=false for a
     non-phone story (it read the full articles) and we skip it. Skipped clusters
     are recorded in news_articles (post_id null) so they aren't reprocessed.
-  - IMAGE: the SOURCE article's own lead image (og:image / twitter:image — the
-    publicity image outlets publish for sharing; extract_lead_image), hosted on
+  - IMAGE: the SOURCE article's own lead image (extract_lead_image tries, in
+    order: og:image / twitter:image meta, then <link rel="image_src">, then a
+    JSON-LD `image` — string / {url} / list, incl @graph — so outlets without an
+    og:image still yield one), hosted on
     R2 at `blog/<slug>.jpg` (host_image) under our own name, credited to the
     outlet (image_credit=source domain, image_credit_url=article URL; website
     renders "Image via <source>"). Falls back to a Pexels stock photo

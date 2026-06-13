@@ -192,11 +192,34 @@ def dedupe_decision(new_title, new_text, recent_posts):
 
 # ── Full-article fetch ───────────────────────────────────────────────────────
 
+def _clean_img_url(url, base_url):
+    """Absolutise + sanity-check a candidate image URL. None if empty/svg."""
+    url = html.unescape((url or "").strip())
+    if not url or url.lower().split("?")[0].endswith(".svg"):
+        return None
+    return urljoin(base_url, url)
+
+
+def _jsonld_image(node):
+    """Pull an image URL out of a JSON-LD node's `image` (string | {url} | list)."""
+    img = node.get("image") if isinstance(node, dict) else None
+    if not img:
+        return None
+    if isinstance(img, list):
+        img = img[0] if img else None
+    if isinstance(img, str):
+        return img
+    if isinstance(img, dict):
+        return img.get("url")
+    return None
+
+
 def extract_lead_image(page_html, base_url):
-    """The article's social/lead image (og:image / twitter:image) — these are
-    the publicity images outlets put out for sharing. Returns an absolute URL
-    or None. Both meta attribute orders (property-then-content and the reverse)
-    are handled."""
+    """The article's social/lead image. Tries, in order: og:image / twitter:image
+    meta tags, <link rel="image_src">, then a JSON-LD `image` — so outlets that
+    don't expose an og:image (but do carry the image in JSON-LD or image_src)
+    still yield one. Returns an absolute non-svg URL or None."""
+    # 1. og:image / twitter:image meta (both attribute orders).
     for prop in ("og:image:secure_url", "og:image", "twitter:image:src", "twitter:image"):
         p = re.escape(prop)
         m = (re.search(r'<meta[^>]+(?:property|name)=["\']' + p +
@@ -204,9 +227,34 @@ def extract_lead_image(page_html, base_url):
              or re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']'
                           + p + r'["\']', page_html, re.I))
         if m:
-            url = html.unescape(m.group(1)).strip()
-            if url and not url.lower().endswith(".svg"):
-                return urljoin(base_url, url)
+            url = _clean_img_url(m.group(1), base_url)
+            if url:
+                return url
+
+    # 2. <link rel="image_src" href="..."> (both attribute orders).
+    m = (re.search(r'<link[^>]+rel=["\']image_src["\'][^>]+href=["\']([^"\']+)["\']', page_html, re.I)
+         or re.search(r'<link[^>]+href=["\']([^"\']+)["\'][^>]+rel=["\']image_src["\']', page_html, re.I))
+    if m:
+        url = _clean_img_url(m.group(1), base_url)
+        if url:
+            return url
+
+    # 3. JSON-LD `image` (NewsArticle/Article, possibly under @graph).
+    for block in re.findall(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+                            page_html, re.I | re.S):
+        try:
+            data = json.loads(block.strip())
+        except Exception:
+            continue
+        nodes = data if isinstance(data, list) else [data]
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            graph = node.get("@graph")
+            for n in (graph if isinstance(graph, list) else [node]):
+                url = _clean_img_url(_jsonld_image(n), base_url)
+                if url:
+                    return url
     return None
 
 

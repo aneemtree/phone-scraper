@@ -6,6 +6,7 @@ Claude Code session (triggered on the issue) then investigates + proposes fixes.
 
 No writes. DB-only signals (missing images) always work; the GSMArena match
 re-check is skipped gracefully if GSMArena blocks the CI IP."""
+import statistics
 import sys
 
 from db import supabase, _exec
@@ -28,6 +29,36 @@ def missing_images():
         return _exec(lambda: supabase.table("missing_images").select("*").execute()).data or []
     except Exception:
         return []
+
+
+def scraper_health():
+    """Per-site yield anomalies from scrape_runs (silent breakage). Returns a list
+    of (site, reason), [] if all healthy, or None if the table isn't populated."""
+    try:
+        rows = _exec(lambda: supabase.table("scrape_runs")
+                     .select("site,seen_count,run_complete,run_at")
+                     .order("run_at", desc=True).limit(3000).execute()).data
+    except Exception:
+        return None
+    if not rows:
+        return None
+    by = {}
+    for r in rows:
+        by.setdefault(r["site"], []).append(r)
+    flags = []
+    for site, rs in by.items():
+        latest = rs[0]                       # query is newest-first
+        seen = latest.get("seen_count") or 0
+        prior = [x["seen_count"] for x in rs[1:13] if x.get("seen_count") is not None]
+        med = statistics.median(prior) if prior else None
+        if seen == 0:
+            flags.append((site, "0 phones seen this run — parser likely broken (site HTML changed?)"))
+        elif latest.get("run_complete") is False:
+            flags.append((site, f"run reported incomplete ({seen} seen) — partial/blocked"))
+        elif med and seen < 0.5 * med:
+            flags.append((site, f"yield dropped to {seen} (recent median {int(med)})"))
+    flags.sort()
+    return flags
 
 
 def main():
@@ -83,9 +114,24 @@ def main():
     else:
         out.append("None. 🎉")
 
+    out.append("\n### Scraper health\n")
+    health = scraper_health()
+    if health is None:
+        out.append("_No run data yet (the `scrape_runs` table fills on the next scrape)._")
+    elif health:
+        out.append("Scrapers whose latest run looks broken — usually a site HTML "
+                   "change; fix the matching scraper file.\n")
+        out.append("| Scraper | Signal |")
+        out.append("|---|---|")
+        for site, reason in health:
+            out.append(f"| `{site}.py` | {reason} |")
+    else:
+        out.append("All scrapers yielding normally. 🎉")
+
     out.append("\n---")
     out.append("_Reply on this issue to direct a fix — e.g. \"add alias X\", "
-               "\"non-phone, filter it\", \"upload image for Y\" — and I'll open a PR._")
+               "\"non-phone, filter it\", \"upload image for Y\", \"scraper Z broke\" — "
+               "and I'll open a PR._")
     print("\n".join(out))
 
 

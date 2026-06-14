@@ -172,6 +172,18 @@ def mark_site_oos(site):
     return len(phone_ids)
 
 
+def _record_run(site, seen, total, complete):
+    """Log this run's yield to scrape_runs for the self-healing triage (silent
+    yield-drop detection). Best-effort: never block a scrape if the table is
+    absent (pre-migration) or the write blips."""
+    try:
+        _exec(lambda: supabase.table("scrape_runs").insert({
+            "site": site, "seen_count": seen, "total_count": total, "run_complete": complete,
+        }).execute())
+    except Exception:
+        pass
+
+
 def mark_unseen_out_of_stock(site, run_started_at, min_seen_ratio=0.5, run_complete=None):
     """Flag this site's phones that were NOT seen during the run as out of stock.
 
@@ -194,9 +206,11 @@ def mark_unseen_out_of_stock(site, run_started_at, min_seen_ratio=0.5, run_compl
     if run_complete is None:
         if seen < max(1, int(total * min_seen_ratio)):
             print(f"  [oos] {site}: only {seen}/{total} phones seen this run — skipping OOS sweep (guard)")
+            _record_run(site, seen, total, False)
             return 0
     elif not run_complete:
         print(f"  [oos] {site}: run reported incomplete (scraper health) — skipping OOS sweep")
+        _record_run(site, seen, total, False)
         return 0
     # Not seen this run -> out of stock (older last_seen_at, or never stamped).
     _exec(lambda: supabase.table("phones").update({"in_stock": False}).eq("site", site).lt("last_seen_at", run_started_at).execute())
@@ -208,6 +222,7 @@ def mark_unseen_out_of_stock(site, run_started_at, min_seen_ratio=0.5, run_compl
     # is sold out. Mark grades not refreshed this run as out_of_stock too.
     cond_oos = _mark_disappeared_conditions_oos(site, run_started_at)
     print(f"  [oos] {site}: {seen}/{total} seen, {n} phones OOS, {cond_oos} conditions OOS")
+    _record_run(site, seen, total, True)
     return n
 
 

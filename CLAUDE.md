@@ -237,6 +237,15 @@ write). A Claude Code session triggered on that issue investigates (cause class:
 clean_model/alias gap, NON_PHONE_KEYWORDS, or genuinely-absent → admin image),
 comments the proposed fix, and on the owner's reply opens a PR. Same issue-channel
 pattern is intended for Sentry via Sentry's native GitHub issue integration.
+ALL SCRAPERS: db._record_run() logs each run's yield to the `scrape_runs` table
+(site, seen_count, total_count, run_complete) from INSIDE mark_unseen_out_of_stock
+(all three exit paths) — so every scraper is covered with no per-scraper edit.
+triage.py scraper_health() flags a site whose latest run saw 0 phones, reported
+run_complete=false, or dropped below ~50% of its recent-12-run median (silent
+breakage = site HTML changed); these show in the same triage issue as `<site>.py`.
+Hard crashes are already caught by obs.py/Sentry (→ native GitHub issue). Schema:
+`scrape_runs` (id, site, run_at default now(), seen_count, total_count,
+run_complete) — _record_run is best-effort so scraping never breaks pre-migration.
 
 ### GSMArena specs & canonical images (gsmarena.py)
 Enriches each phone MODEL with a spec sheet and a canonical product image from

@@ -160,6 +160,13 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python maplestore.py
 
+      - name: Run Samsung Certified Re-Newed scraper
+        if: ${{ !cancelled() }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python samsungcr.py
+
       - name: Normalize (clean names + recompute keys)
         if: ${{ !cancelled() }}
         env:

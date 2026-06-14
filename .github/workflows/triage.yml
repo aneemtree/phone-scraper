@@ -1,0 +1,45 @@
+name: Self-healing triage
+
+# Weekly health report: phones GSMArena couldn't match + in-stock models with no
+# image, each pre-diagnosed. Upserts ONE GitHub issue (label "triage"); a Claude
+# Code session triggered on that issue investigates and proposes fixes.
+on:
+  schedule:
+    - cron: "0 6 * * 0"   # Sundays 06:00 UTC, ~2h after enrich-specs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Build triage report
+        run: python triage.py > report.md
+      - name: Upsert triage issue
+        run: |
+          set -e
+          gh label create triage --color FFA500 --description "Self-healing triage" 2>/dev/null || true
+          title="🔧 Weekly triage: unmatched specs & missing images"
+          num=$(gh issue list --label triage --state open --json number,title \
+                  --jq ".[] | select(.title==\"$title\") | .number" | head -n1)
+          if [ -n "$num" ]; then
+            gh issue edit "$num" --body-file report.md
+            gh issue comment "$num" --body "♻️ Triage refreshed on $(date -u +%Y-%m-%d). See the updated issue body."
+            echo "Updated issue #$num"
+          else
+            gh issue create --title "$title" --label triage --body-file report.md
+            echo "Created triage issue"
+          fi

@@ -223,6 +223,21 @@ import, so no scraper deps; just boto3 + rembg). Workflow `removebg.yml`
 image (skips ones already in nobg/). cleanup_r2_images.py keeps `nobg/`. REMBG_MODEL
 env overrides the model.
 
+### Self-healing triage (triage.py + triage.yml)
+Weekly health loop: detect → diagnose → GitHub issue → human decides → fix.
+`triage.py` (no writes) surfaces two signals and pre-diagnoses them as a markdown
+issue body: (1) IN-STOCK phones recorded `specs.status='not_found'` that STILL
+don't match the live GSMArena device DB (re-verified via match_with_aliases; stale
+not_founds that would match now are dropped), each with closest_devices()
+candidates; (2) the `missing_images` view (in-stock models with no image). It's
+DB-only-safe: if GSMArena blocks the CI IP it notes that and still reports images.
+`triage.yml` (Sundays 06:00 UTC, ~2h after enrich-specs; + dispatch) runs it and
+UPSERTS one issue (label `triage`, stable title) via `gh` (GITHUB_TOKEN, issues:
+write). A Claude Code session triggered on that issue investigates (cause class:
+clean_model/alias gap, NON_PHONE_KEYWORDS, or genuinely-absent → admin image),
+comments the proposed fix, and on the owner's reply opens a PR. Same issue-channel
+pattern is intended for Sentry via Sentry's native GitHub issue integration.
+
 ### GSMArena specs & canonical images (gsmarena.py)
 Enriches each phone MODEL with a spec sheet and a canonical product image from
 GSMArena. Specs/image are per-MODEL (display, chipset, camera, image are identical

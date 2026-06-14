@@ -84,7 +84,8 @@ MONTH_DAYS(30)/YEAR_DAYS(365) keep the conversion consistent across scrapers.
     that advertise ONE blanket warranty for all listings). The product owner
     curates these per store (e.g. controlz=540, refit/tetro/ovantica=360,
     cashify/grest/thephonehub/easyphones/budli/maplestore=180, cellbuddy/itradeit
-    =90, gadgetrebirth=15, mobilegoo/oldsold/sahivalue/xtracover=7).
+    =90, gadgetrebirth=15, mobilegoo/oldsold/sahivalue/xtracover=7, samsungcr=365).
+    samsungcr also sets warranty_label="Brand Warranty" per offer (1-yr Samsung).
   - NOT captured per-offer yet: maplestore (no warranty stated), sahivalue
     (brand-warranty text only), itradeit/xtracover/controlz (mixed brand/store
     warranties) — covered by their store default above.
@@ -101,6 +102,8 @@ store-wide score repeated on every product (that's what the trust_score is for).
 save_price(rating=, review_count=); both set together, left null when a product
 has no real reviews (count must be > 0). Per-store source:
   - cashify: `ar`/`tr` in the RSC payload (per product). Up to ~4600 reviews.
+  - samsungcr: per-product `ratings`/`reviewCount` in the searchapi payload
+    (genuine Samsung product reviews; stored only when reviewCount > 0).
   - controlz: scraped from the rendered "4.7 · 21 REVIEWS" header text.
   - ovantica: JSON-LD ratingValue/reviewCount (sparse; some look store-wide).
   - itradeit: WooCommerce Store API products carry native `average_rating` +
@@ -301,7 +304,7 @@ frontend serves them untransformed (Cloudflare's resizer skips vector).
 ### Scrapers & pipeline
 Active scrapers: cashify, controlz, refit, xtracover, ovantica, mobilegoo,
 sahivalue, oldsold, thephonehub, easyphones, tetro, grest, cellbuddy, budli,
-itradeit, gadgetrebirth, maplestore. ControlZ filters non-phones by the actual
+itradeit, gadgetrebirth, maplestore, samsungcr. ControlZ filters non-phones by the actual
 product TITLE via is_phone() (a slug-only check missed accessories like power
 banks); thephonehub filters on the CLEAN model, not the slug, because its slugs
 embed marketing words (e.g. "50mp-ois-camera") that collide with is_phone().
@@ -409,6 +412,25 @@ Per-site data source / speed:
     colour/warranty units. Price rupees; availability = variant.available;
     deep-link ?variant=<id>. `python3 maplestore.py --dry` validates with NO DB.
     OOS-capable (INCLUDE_OOS).
+  - samsungcr: Samsung Certified Re-Newed (samsung.com/in/certified-re-newed),
+    Samsung's OFFICIAL OEM-renewed Galaxy program, requests-only, Samsung-only.
+    The landing page is JS-rendered but embeds the representative SKU codes
+    (regex SM5[A-Z0-9]+INS, one per family); the catalog comes from a public JSON
+    API: searchapi.samsung.com/v6/front/b2c/product/model/list/newhybris/cheil
+    ?siteCode=in&modelList=<csv codes>&saleSkuYN=N&onlyRequestSkuYN=N&commonCodeYN=N
+    (returns each family + all colour/storage/RAM variants). Per variant:
+    displayName, storage+colour via fmyChipList, RAM via the "(12 GB Memory)"
+    suffix, `price` (strike) + `promotionPrice` (the CR selling price we SAVE),
+    `stockStatusText` in/outOfStock (validated availability), per-PRODUCT
+    ratings/reviewCount (genuine Samsung reviews, stored), pdpUrl (deep-link),
+    largeUrl image. ONE condition "Certified Re-Newed"; warranty = 1-year Samsung
+    -> warranty_label "Brand Warranty" (store default_warranty_days=365). RAM
+    matters (Galaxy A56 ships as separate 8GB/12GB families) -> RAM folded into
+    name + dedup key (variant_key, ram, condition), make_variant_key storage-only;
+    clean_model maps "Galaxy …" -> "Samsung Galaxy …" so keys match other stores.
+    `python3 samsungcr.py --dry` validates with NO DB. OOS-capable (INCLUDE_OOS).
+    CAVEAT: Samsung is Akamai-fronted — GitHub Actions IPs may get 403'd (like
+    GSMArena); if CI blocks, run locally or via proxy.
 
 ### Condition vocabulary
 Grades from graded stores are Fair/Good/Superb (Cashify/Grest/ThePhoneHub) and
@@ -422,6 +444,8 @@ category folds to "Unknown Condition"). gadgetrebirth adds "Like New" (shares
 Tetro's label), "Excellent", and "New" (store-specific grades); its "Good"/"Fair"
 share the Cashify vocab. maplestore maps its page grade "Almost New" to "Like New"
 (shared with gadgetrebirth/Tetro) and uses Superb/Good/Fair from the Cashify vocab.
+samsungcr adds "Certified Re-Newed" (Samsung's official OEM-renewed grade, 1-year
+brand warranty), store-specific.
   - thephonehub: WooCommerce, requests-only. Listing + metadata from the public
     Store API (/wp-json/wc/store/v1/products?category=160). Per-variant
     price/stock/grade from the product page's embedded `data-product_variations`
@@ -446,8 +470,8 @@ Workflows (GitHub Actions):
     It does NOT run on push/merge. Runs all scrapers, then normalize_db.py.
   - scrape-one.yml — manual single-site chooser (workflow_dispatch) for testing
     one scraper. Does NOT run normalize_db.
-  - scrape-catalog.yml — MONTHLY (1st, 01:00 UTC) + dispatch. Runs the 15 JSON/RSC
-    scrapers with INCLUDE_OOS=1 then normalize_db, purely for SEO.
+  - scrape-catalog.yml — MONTHLY (1st, 01:00 UTC) + dispatch. Runs the 16 JSON/RSC
+    scrapers (incl samsungcr) with INCLUDE_OOS=1 then normalize_db, purely for SEO.
 GitHub Actions cron is best-effort and often delayed (can be 1–3h late).
 
 ### Out-of-stock catalog (SEO, monthly)

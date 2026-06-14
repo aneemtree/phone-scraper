@@ -88,6 +88,9 @@ jobs:
       - name: Maple Store (incl OOS)
         if: ${{ !cancelled() }}
         run: python maplestore.py
+      - name: Samsung Certified Re-Newed (incl OOS)
+        if: ${{ !cancelled() }}
+        run: python samsungcr.py
 
       - name: Normalize (clean names + recompute keys)
         if: ${{ !cancelled() }}

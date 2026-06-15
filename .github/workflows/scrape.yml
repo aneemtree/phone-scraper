@@ -2,9 +2,8 @@ name: Scrape phone prices
 
 on:
   schedule:
-    # Times in UTC. IST = UTC+5:30.
-    - cron: "30 0 * * *"   # 06:00 IST
-    - cron: "30 9 * * *"   # 15:00 IST
+    # Every 3 hours (UTC). Best-effort; GitHub cron can run late.
+    - cron: "0 */3 * * *"
   workflow_dispatch:
 
 permissions:

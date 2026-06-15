@@ -7,7 +7,7 @@ name: Monthly SEO catalog (include out-of-stock)
 # OOS source yet).
 on:
   schedule:
-    - cron: "0 1 1 * *"   # 01:00 UTC on the 1st of each month
+    - cron: "0 1 * * *"   # daily 01:00 UTC (OOS SEO catalog)
   workflow_dispatch:
 
 permissions:

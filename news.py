@@ -522,7 +522,7 @@ def run(dry=False):
     # Recent posts (for the duplicate check inside the writer prompt).
     since = (datetime.now(timezone.utc) - timedelta(days=RECENT_POST_DAYS)).isoformat()
     recent_posts = _exec(lambda: supabase.table("blog_posts")
-                         .select("id, slug, title, sources, body_html")
+                         .select("id, slug, title, sources, body_html, image_url")
                          .gte("created_at", since)
                          .order("created_at", desc=True).limit(60).execute()).data
 
@@ -571,7 +571,7 @@ def run(dry=False):
             except Exception as e:
                 log_error(e, stage="dedupe")
             if dup:
-                attach_sources(supabase, _exec, dup, cluster)
+                attach_sources(supabase, _exec, dup, cluster, lead_image, lead_src)
                 print(f"  DUPLICATE of {dup['slug']} (same event) — sources attached: {titles}")
                 continue
 
@@ -588,7 +588,7 @@ def run(dry=False):
                 slug = result["duplicate_of"]
                 match = next((p for p in recent_posts if p["slug"] == slug), None)
                 if match:
-                    attach_sources(supabase, _exec, match, cluster)
+                    attach_sources(supabase, _exec, match, cluster, lead_image, lead_src)
                     print(f"  DUPLICATE of {slug} — sources attached: {titles}")
                 else:
                     record_articles(supabase, _exec, cluster, None)
@@ -632,9 +632,11 @@ def run(dry=False):
             print(f"  cluster failed (will retry next run): {titles}: {e}")
 
 
-def attach_sources(supabase, _exec, match, cluster):
+def attach_sources(supabase, _exec, match, cluster, lead_image=None, lead_src=None):
     """Merge a duplicate cluster's outlets into an existing post's sources
-    (deduped by url) and record its articles against that post."""
+    (deduped by url) and record its articles against that post. If the existing
+    post has NO image and the new coverage carries a lead image, backfill it
+    from the new article (so a duplicate can fill an imageless post)."""
     new_sources = (match.get("sources") or []) + [
         {"title": a["title"], "url": a["url"], "domain": a["source_domain"]}
         for a in cluster
@@ -643,9 +645,15 @@ def attach_sources(supabase, _exec, match, cluster):
     for s in new_sources:
         if s["url"] not in su:
             su.add(s["url"]); dedup.append(s)
-    _exec(lambda: supabase.table("blog_posts").update({
-        "sources": dedup, "updated_at": datetime.now(timezone.utc).isoformat(),
-    }).eq("id", match["id"]).execute())
+    update = {"sources": dedup, "updated_at": datetime.now(timezone.utc).isoformat()}
+    if not match.get("image_url") and lead_image and lead_src:
+        image_url, credit, credit_url = host_source_image(
+            lead_image, lead_src.get("source_domain"), lead_src.get("url"), match["slug"])
+        if image_url:
+            update.update({"image_url": image_url, "image_credit": credit,
+                           "image_credit_url": credit_url})
+            print(f"    backfilled image for /phone-news/{match['slug']} from new source")
+    _exec(lambda: supabase.table("blog_posts").update(update).eq("id", match["id"]).execute())
     record_articles(supabase, _exec, cluster, match["id"])
 
 

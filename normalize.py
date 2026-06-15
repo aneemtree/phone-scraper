@@ -38,6 +38,9 @@ COLORS = [
     "dash", "sunshine", "sunset", "orange", "emerald", "brown", "pearl",
     "peari", "lilac", "iceblue", "graphite", "graphit", "awesome", "mostly",
     "prism cube", "prism crush", "cube", "crush", "lunar", "deepsea", "stormy",
+    # Triage leaks (colour qualifiers stores append to the model name, blocking
+    # the GSMArena match + cross-store merge). Multi-word first.
+    "deep ocean", "marshmallow", "atlantis", "sapphire", "stardust", "glacier", "cross",
 ]
 
 # Roman numerals (II-XII) that title-casing would lower-case (e.g. Sony "Xperia 1
@@ -320,6 +323,7 @@ def clean_model(title: str) -> str:
     # above, e.g. "Note 20 RAM , Mystic"). Remove the orphaned keyword + any comma
     # left dangling so it never leaks into the model name.
     t = re.sub(r"\bram\b", " ", t, flags=re.I)
+    t = re.sub(r"\bsim\s*slot\b", " ", t, flags=re.I)    # "iPhone 15 Pro Sim Slot" leak
     for c in COLORS:                                     # colors (longest first)
         t = re.sub(rf"\b{re.escape(c)}\b", " ", t, flags=re.I)
     t = re.sub(r"\s*,\s*", " ", t)                       # drop orphaned commas

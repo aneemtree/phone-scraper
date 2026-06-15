@@ -173,6 +173,13 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python normalize_db.py
 
+      - name: Beebom images (primary; new models only — self-limiting)
+        if: ${{ !cancelled() }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python beebom.py
+
       - name: Send price-drop notifications
         if: ${{ !cancelled() }}
         env:

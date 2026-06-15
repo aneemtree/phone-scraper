@@ -95,3 +95,6 @@ jobs:
       - name: Normalize (clean names + recompute keys)
         if: ${{ !cancelled() }}
         run: python normalize_db.py
+      - name: Beebom images (primary; new models only — self-limiting)
+        if: ${{ !cancelled() }}
+        run: python beebom.py

@@ -143,8 +143,11 @@ def fetch_image(slug):
 def _targets():
     phones = _fetch_all("phones", "model")
     specs = _fetch_all("specs", "model,image_url,image_source")
+    # Self-limiting (like gsmarena's not_found): skip models that already have a
+    # Beebom image AND those recorded as a miss, so running after every scrape
+    # only fetches NEW models — not re-hammering hundreds of unmatched ones.
     have = {(r.get("model") or "").lower() for r in specs
-            if r.get("image_source") == "beebom" and r.get("image_url")}
+            if r.get("image_source") in ("beebom", "beebom_miss")}
     todo, seen = [], set()
     for p in phones:
         m = p.get("model") or ""
@@ -169,6 +172,7 @@ def enrich(limit=None):
         img = fetch_image(slug) if slug else None
         if not img:
             miss += 1
+            upsert_specs(model, {"image_source": "beebom_miss"})  # don't retry next run
             print(f"  MISS   {model}")
             continue
         hosted = host_image(img, f"img/{make_variant_key(model, None)}.jpg") or img

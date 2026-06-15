@@ -193,7 +193,13 @@ gadgets.beebom.com front-back render at ~640-1000px) in `specs.image_url`; FALLB
 = GSMArena (gsmarena.py bigpic, only ~160px) in `specs.image_fallback`, shown only
 when Beebom has no match. Admin uploads also write `image_url` (image_source=
 'admin'). Both enrichers write the SAME per-model specs row via upsert_specs(), to
-SEPARATE columns, so neither clobbers the other. host_image() in db.py uploads to
+SEPARATE columns, so neither clobbers the other. SCHEDULING: beebom.py runs AFTER
+normalize_db in scrape.yml (every 3h) and scrape-catalog.yml (daily), so new
+models get their primary image fast; gsmarena.py (fallback) runs daily via
+enrich-specs.yml. beebom._targets() is SELF-LIMITING — it skips models already
+imaged AND those recorded image_source='beebom_miss' on a failed match, so the
+frequent runs only fetch NEW models (never re-hammering hundreds of unmatched
+ones). To force a re-try of a miss, clear its image_source. host_image() in db.py uploads to
 Cloudflare R2 (zero egress) on first sighting (head_object skip); paths: Beebom
 `img/{model_slug}.jpg`, GSMArena `specs/{model_slug}.jpg`, admin
 `admin/{model_slug}.jpg`.

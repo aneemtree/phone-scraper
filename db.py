@@ -395,9 +395,14 @@ def host_image(source_url, dest_path):
         print(f"    image download failed: {e}")
         return source_url  # keep the source URL as a fallback
 
-    # 3) Upload to R2.
+    # 3) Upload to R2. Long, immutable cache — the key is content-stable per
+    # device/model, so a 1-year cache is safe and fixes the "efficient cache
+    # lifetimes" Lighthouse audit (Cloudflare's image transform honours the
+    # origin Cache-Control). Re-runs overwrite the same key when an image changes.
     try:
-        client.put_object(Bucket=R2_BUCKET, Key=dest_path, Body=data, ContentType=content_type)
+        client.put_object(Bucket=R2_BUCKET, Key=dest_path, Body=data,
+                          ContentType=content_type,
+                          CacheControl="public, max-age=31536000, immutable")
     except Exception as e:
         print(f"    image upload failed: {e}")
         return source_url

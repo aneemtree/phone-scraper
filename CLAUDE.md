@@ -193,7 +193,13 @@ gadgets.beebom.com front-back render at ~640-1000px) in `specs.image_url`; FALLB
 = GSMArena (gsmarena.py bigpic, only ~160px) in `specs.image_fallback`, shown only
 when Beebom has no match. Admin uploads also write `image_url` (image_source=
 'admin'). Both enrichers write the SAME per-model specs row via upsert_specs(), to
-SEPARATE columns, so neither clobbers the other. host_image() in db.py uploads to
+SEPARATE columns, so neither clobbers the other. SCHEDULING: beebom.py runs AFTER
+normalize_db in scrape.yml (every 3h) and scrape-catalog.yml (daily), so new
+models get their primary image fast; gsmarena.py (fallback) runs daily via
+enrich-specs.yml. beebom._targets() is SELF-LIMITING — it skips models already
+imaged AND those recorded image_source='beebom_miss' on a failed match, so the
+frequent runs only fetch NEW models (never re-hammering hundreds of unmatched
+ones). To force a re-try of a miss, clear its image_source. host_image() in db.py uploads to
 Cloudflare R2 (zero egress) on first sighting (head_object skip); paths: Beebom
 `img/{model_slug}.jpg`, GSMArena `specs/{model_slug}.jpg`, admin
 `admin/{model_slug}.jpg`.
@@ -283,7 +289,8 @@ NO writes (run it to eyeball match quality first).
 
 Schema: `specs_schema.sql` (idempotent; variant_key PK, specs jsonb, image_url,
 gsm_url/name/id, match_score, status, updated_at trigger). Workflow:
-`enrich-specs.yml` (weekly + dispatch). GSMArena may block Actions datacenter IPs
+`enrich-specs.yml` (DAILY 04:00 UTC + dispatch; incremental so it only fills what's
+still missing). GSMArena may block Actions datacenter IPs
 (Cloudflare) — if a run comes back mostly not_found/errored, run gsmarena.py locally.
 specs_schema.sql also (re)creates the offers view (image_url = specs.image_url) and
 the missing_images admin view. Order on first rollout: create specs table → run
@@ -465,12 +472,13 @@ brand warranty), store-specific.
     opacity/line-through/price is the source of truth) but runs each product in
     its own isolated browser via a ThreadPoolExecutor (WORKERS) for speed.
 
-Workflows (GitHub Actions):
-  - scrape.yml — full run, `schedule` only (6 AM & 3 PM IST) + workflow_dispatch.
+Workflows (GitHub Actions; repo is PUBLIC so Actions minutes are free/unlimited —
+that's why the cadences below are aggressive):
+  - scrape.yml — full run, EVERY 3 HOURS (cron 0 */3 * * *) + workflow_dispatch.
     It does NOT run on push/merge. Runs all scrapers, then normalize_db.py.
   - scrape-one.yml — manual single-site chooser (workflow_dispatch) for testing
     one scraper. Does NOT run normalize_db.
-  - scrape-catalog.yml — MONTHLY (1st, 01:00 UTC) + dispatch. Runs the 16 JSON/RSC
+  - scrape-catalog.yml — DAILY (01:00 UTC) + dispatch. Runs the 16 JSON/RSC
     scrapers (incl samsungcr) with INCLUDE_OOS=1 then normalize_db, purely for SEO.
 GitHub Actions cron is best-effort and often delayed (can be 1–3h late).
 
@@ -538,7 +546,8 @@ scraper, and never push a new/changed scraper until its output is verified.
 Fully automatic phone-news blog: Google Alerts RSS -> clustered stories ->
 Claude-written ORIGINAL posts with the SOURCE article's own image -> Supabase
 `blog_posts` (rendered at /phone-news on the website). Workflow `news.yml`
-(every 6h + dispatch).
+(NEAR REAL-TIME: polls the alert feeds every 15 min + dispatch — most runs no-op
+when there are no new alerts, so a Claude call only fires on a fresh cluster).
   - FEEDS: the `news_feeds` table holds Google Alerts "deliver to RSS" URLs
     (insert url+label; active=true). No code change to add/remove feeds.
   - PIPELINE per run: parse Atom feeds (Google redirect links unwrapped to the
@@ -556,7 +565,10 @@ Claude-written ORIGINAL posts with the SOURCE article's own image -> Supabase
     the model returns duplicate_of=<slug> and the new outlets are attached to
     that post's `sources` instead of publishing a second post. Original wording
     enforced by prompt; body stored as escaped <p> HTML (we build it, model
-    returns plain paragraphs).
+    returns plain paragraphs). DUPLICATE IMAGE BACKFILL: attach_sources() also
+    fills an imageless existing post — if match.image_url is null and the new
+    coverage has a lead image, it hosts + sets it (so a later outlet's image
+    rescues a post published without one). recent_posts now selects image_url.
   - RELEVANCE: WhatPhone only covers phones. Two gates drop off-topic feed
     items (sports/politics/world news): (1) a cheap keyword pre-filter
     (looks_phone_related / PHONE_HINTS) skips a cluster with zero phone signal

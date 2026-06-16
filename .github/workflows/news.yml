@@ -2,8 +2,10 @@ name: News blog
 
 on:
   schedule:
-    # Every 6 hours (best-effort; GitHub cron is often delayed).
-    - cron: "30 1,7,13,19 * * *"
+    # Near real-time: poll the alert feeds every 15 min (best-effort; GitHub
+    # cron is often delayed). Most runs are no-ops (no new alerts) so they're
+    # cheap — a Claude call only fires when a new story clusters.
+    - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
       mode:

@@ -7,7 +7,7 @@ name: Monthly SEO catalog (include out-of-stock)
 # OOS source yet).
 on:
   schedule:
-    - cron: "0 1 1 * *"   # 01:00 UTC on the 1st of each month
+    - cron: "0 1 * * *"   # daily 01:00 UTC (OOS SEO catalog)
   workflow_dispatch:
 
 permissions:
@@ -95,3 +95,6 @@ jobs:
       - name: Normalize (clean names + recompute keys)
         if: ${{ !cancelled() }}
         run: python normalize_db.py
+      - name: Beebom images (primary; new models only — self-limiting)
+        if: ${{ !cancelled() }}
+        run: python beebom.py

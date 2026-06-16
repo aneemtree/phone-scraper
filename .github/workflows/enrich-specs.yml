@@ -10,7 +10,7 @@ name: Enrich specs (GSMArena)
 #   python3 gsmarena.py
 on:
   schedule:
-    - cron: "0 4 * * 0"   # weekly, Sundays 04:00 UTC
+    - cron: "0 4 * * *"   # daily 04:00 UTC (incremental — only fills what's missing)
   workflow_dispatch:
     inputs:
       limit:

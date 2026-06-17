@@ -1,3 +1,16 @@
+## Fixing issues — FIX THE ROOT/SHARED CAUSE, NOT THE INSTANCE (IMPORTANT)
+Applies to EVERY change in this repo, not just naming. When an issue shows up in
+ONE place (a scraper, a workflow, an enrichment, a DB write, a normalization
+case), ask "where does this class of problem actually live, and would other
+cases hit it?" — then fix it at the SHARED/systemic level (a helper in db.py /
+normalize.py / reviews.py / obs.py, a shared on-conflict upsert, a workflow
+pattern applied to all steps) so every current AND future case is covered,
+instead of patching the one reported instance. A local patch usually lets the
+same bug resurface elsewhere (e.g. the Nothing-name unwrap done only in one
+scraper resurfaced via another store until moved into clean_model). Litmus test:
+"would another store / caller / workflow hit this?" — if yes, shared layer.
+Carry any genuinely new, generalizable learning back into this CLAUDE.md.
+
 ## Merging to main
 NEVER merge to `main` autonomously. Develop, commit, and push freely on the
 feature branch, but only merge to `main` when the user EXPLICITLY asks for it.

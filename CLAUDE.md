@@ -546,8 +546,10 @@ scraper, and never push a new/changed scraper until its output is verified.
 Fully automatic phone-news blog: Google Alerts RSS -> clustered stories ->
 Claude-written ORIGINAL posts with the SOURCE article's own image -> Supabase
 `blog_posts` (rendered at /phone-news on the website). Workflow `news.yml`
-(NEAR REAL-TIME: polls the alert feeds every 15 min + dispatch — most runs no-op
-when there are no new alerts, so a Claude call only fires on a fresh cluster).
+(EVERY 6 HOURS + dispatch — most runs no-op when there are no new alerts, so a
+Claude call only fires on a fresh cluster. Was */15 min, but GitHub throttles
+sub-hourly crons hard AND a repo hammering the scheduler that often gets its
+whole scheduled queue deprioritized, which was also delaying scrape.yml).
   - FEEDS: the `news_feeds` table holds Google Alerts "deliver to RSS" URLs
     (insert url+label; active=true). No code change to add/remove feeds.
   - PIPELINE per run: parse Atom feeds (Google redirect links unwrapped to the

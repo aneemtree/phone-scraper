@@ -297,6 +297,14 @@ def parse_name_from_listing(raw: str, href: str = "") -> tuple[str, str | None, 
 def clean_model(title: str) -> str:
     """Strip storage, color, and refurb noise to get a clean model name."""
     t = title
+    # "Nothingphone"/"NothingPhone" written as ONE word (no space) — some stores
+    # concatenate brand+product, so the first-word brand logic never split it and
+    # it stayed "Nothingphone". Insert the space EARLY (before the paren/number
+    # handling) so "NothingPhone (1)" then resolves to "Nothing Phone 1" and a
+    # stuck-on number ("Nothingphone2a") splits to "Nothing Phone 2a". Skips
+    # "Nothing CMF Phone …" (no "phone" immediately after "nothing").
+    t = re.sub(r"\bnothing\s*phone(?=\d)", "Nothing Phone ", t, flags=re.I)  # Nothingphone2a
+    t = re.sub(r"\bnothing\s*phone\b", "Nothing Phone", t, flags=re.I)        # Nothingphone / NothingPhone (1)
     # Preserve parenthesised model identifiers BEFORE the generic paren strip below:
     # Nothing/CMF "Phone (1)"/"(2a)" and iPhone "SE (2020)" carry the model number
     # in parens, which the strip would otherwise delete (collapsing Phone 1/2/3 and

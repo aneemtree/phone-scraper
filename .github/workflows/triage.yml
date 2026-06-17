@@ -1,11 +1,11 @@
 name: Self-healing triage
 
-# Weekly health report: phones GSMArena couldn't match + in-stock models with no
+# Daily health report: phones GSMArena couldn't match + in-stock models with no
 # image, each pre-diagnosed. Upserts ONE GitHub issue (label "triage"); a Claude
 # Code session triggered on that issue investigates and proposes fixes.
 on:
   schedule:
-    - cron: "0 6 * * 0"   # Sundays 06:00 UTC, ~2h after enrich-specs
+    - cron: "0 6 * * *"   # daily 06:00 UTC, ~2h after enrich-specs
   workflow_dispatch:
 
 permissions:
@@ -32,7 +32,7 @@ jobs:
         run: |
           set -e
           gh label create triage --color FFA500 --description "Self-healing triage" 2>/dev/null || true
-          title="🔧 Weekly triage: unmatched specs & missing images"
+          title="🔧 Triage: unmatched specs & missing images"
           num=$(gh issue list --label triage --state open --json number,title \
                   --jq ".[] | select(.title==\"$title\") | .number" | head -n1)
           if [ -n "$num" ]; then

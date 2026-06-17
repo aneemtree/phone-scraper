@@ -41,6 +41,10 @@ COLORS = [
     # Triage leaks (colour qualifiers stores append to the model name, blocking
     # the GSMArena match + cross-store merge). Multi-word first.
     "deep ocean", "marshmallow", "atlantis", "sapphire", "stardust", "glacier", "cross",
+    # Marketing colour QUALIFIERS left after the base colour is stripped:
+    # Samsung F62 "Laser Grey/Green" -> "Laser"; Pixel 9a "Iris"; Samsung M52
+    # "Icy Blue" -> "Icy"/"Ice". None are real model names, so safe to strip.
+    "icy blue", "laser", "iris", "icy", "ice",
 ]
 
 # Roman numerals (II-XII) that title-casing would lower-case (e.g. Sony "Xperia 1

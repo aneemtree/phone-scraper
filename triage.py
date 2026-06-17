@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Self-healing triage: surface phones GSMArena couldn't match and in-stock
 models with no image, each with diagnosis, as a GitHub-issue body (markdown to
-stdout). The triage.yml workflow runs this weekly and upserts one issue; a
+stdout). The triage.yml workflow runs this daily and upserts one issue; a
 Claude Code session (triggered on the issue) then investigates + proposes fixes.
 
 No writes. DB-only signals (missing images) always work; the GSMArena match
@@ -85,7 +85,7 @@ def main():
 
     out = []
     out.append("## 🔧 Self-healing triage\n")
-    out.append(f"_Auto-generated weekly. {len(unmatched)} unmatched spec(s), "
+    out.append(f"_Auto-generated daily. {len(unmatched)} unmatched spec(s), "
                f"{len(imgs)} model(s) with no image._\n")
 
     out.append("### Phones GSMArena couldn't match (in stock)\n")

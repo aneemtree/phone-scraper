@@ -563,7 +563,11 @@ when there are no new alerts, so a Claude call only fires on a fresh cluster).
     paragraphs, image_query}. The prompt carries the last 14 days of post
     titles+slugs: if the story RESURFACES from another outlet in a later run,
     the model returns duplicate_of=<slug> and the new outlets are attached to
-    that post's `sources` instead of publishing a second post. Original wording
+    that post's `sources` instead of publishing a second post. This single
+    writer call is the ONLY LLM call per cluster (one Haiku call) — dedup is
+    NOT a separate model call (a redundant claude-sonnet-4-6 dedup pre-check was
+    removed; the writer reads the full articles so its duplicate_of is the dedup,
+    cheaper + better-informed). No Sonnet usage anywhere now. Original wording
     enforced by prompt; body stored as escaped <p> HTML (we build it, model
     returns plain paragraphs). DUPLICATE IMAGE BACKFILL: attach_sources() also
     fills an imageless existing post — if match.image_url is null and the new

@@ -134,62 +134,6 @@ def cluster_articles(articles):
     return clusters
 
 
-# ── Cross-run dedup (semantic, Sonnet) ───────────────────────────────────────
-
-DEDUP_MODEL = "claude-sonnet-4-6"   # stronger model for the same-event judgment
-
-DEDUP_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "duplicate_of": {
-            "type": ["string", "null"],
-            "description": "Slug of the recent post this story duplicates, or null.",
-        },
-        "reason": {"type": "string"},
-    },
-    "required": ["duplicate_of", "reason"],
-    "additionalProperties": False,
-}
-
-DEDUP_SYSTEM = (
-    "You deduplicate phone-news before publishing. Decide if a NEW story is the "
-    "SAME story as one already published.\n"
-    "DUPLICATE = the same phone(s) AND the same event/announcement (a launch, a "
-    "price drop or sale, a leak/rumor, a specific feature rollout), even if the "
-    "headline wording, angle, or outlet is completely different.\n"
-    "NOT a duplicate (return null): a DIFFERENT event about the same phone (e.g. "
-    "its launch vs a later price cut vs a new feature vs a deal), a roundup vs a "
-    "single device, or an 'X vs Y' comparison vs a single-phone story.\n"
-    "Only return a slug from the list you are given; if unsure, return null."
-)
-
-
-def dedupe_decision(new_title, new_text, recent_posts):
-    """Ask Sonnet whether this story duplicates a recent post (same phone + same
-    event). Returns the matching slug or None. Best-effort: any error -> None."""
-    if not recent_posts:
-        return None
-    import anthropic
-    lines = []
-    for p in recent_posts:
-        snip = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", p.get("body_html") or "")).strip()[:200]
-        lines.append(f"- slug: {p['slug']}\n  title: {p['title']}\n  summary: {snip}")
-    user = (
-        f"NEW STORY:\nTitle: {new_title}\nText: {new_text[:2000]}\n\n"
-        f"RECENTLY PUBLISHED POSTS:\n" + "\n".join(lines) + "\n\n"
-        "Does the NEW STORY duplicate one of the recent posts (same phone AND "
-        "same event)? Return its slug as duplicate_of, else null."
-    )
-    resp = anthropic.Anthropic().messages.create(
-        model=DEDUP_MODEL, max_tokens=300, system=DEDUP_SYSTEM,
-        messages=[{"role": "user", "content": user}],
-        output_config={"format": {"type": "json_schema", "schema": DEDUP_SCHEMA}},
-    )
-    text = next(b.text for b in resp.content if b.type == "text")
-    slug = json.loads(text).get("duplicate_of")
-    return slug or None
-
-
 # ── Full-article fetch ───────────────────────────────────────────────────────
 
 def _clean_img_url(url, base_url):
@@ -522,7 +466,7 @@ def run(dry=False):
     # Recent posts (for the duplicate check inside the writer prompt).
     since = (datetime.now(timezone.utc) - timedelta(days=RECENT_POST_DAYS)).isoformat()
     recent_posts = _exec(lambda: supabase.table("blog_posts")
-                         .select("id, slug, title, sources, body_html, image_url")
+                         .select("id, slug, title, sources, image_url")
                          .gte("created_at", since)
                          .order("created_at", desc=True).limit(60).execute()).data
 
@@ -559,23 +503,9 @@ def run(dry=False):
                       f"image={'yes' if lead_image else 'no'}): {titles}")
                 continue
 
-            # 4c. Semantic cross-run dedup (Sonnet): same phone + same event as a
-            #     recent post = duplicate. Merge sources, skip writing.
-            dup = None
-            try:
-                ctitle = max((a["title"] for a in cluster), key=len)
-                ctext = " ".join(t for _, t in sources_text)
-                dslug = dedupe_decision(ctitle, ctext, recent_posts)
-                if dslug:
-                    dup = next((p for p in recent_posts if p["slug"] == dslug), None)
-            except Exception as e:
-                log_error(e, stage="dedupe")
-            if dup:
-                attach_sources(supabase, _exec, dup, cluster, lead_image, lead_src)
-                print(f"  DUPLICATE of {dup['slug']} (same event) — sources attached: {titles}")
-                continue
-
-            # 5. Write.
+            # 5. Write. (Dedup is handled by the writer's own duplicate_of below —
+            #    it reads the full articles, so a separate dedup LLM call was
+            #    redundant. See step 5b/duplicate_of handling.)
             result = write_post(cluster, sources_text, recent_posts)
 
             # 5b. The writer read the full articles — trust its relevance call.

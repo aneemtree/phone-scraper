@@ -138,6 +138,10 @@ All scrapers must pass model names through clean_model() and storage through
 normalize_storage() before calling make_variant_key(). Never save raw names.
 Key noise words already stripped: 5G, 4G, India, With Box, Open Box, Series,
 model numbers (SM-G991B), years (2021), Refurbished, Renewed, colors, etc.
+COLORS also strips marketing colour QUALIFIERS that leak after the base colour
+is removed (e.g. Samsung F62 "Laser Grey/Green"→"Laser", Pixel 9a "Iris",
+Samsung M52 "Icy Blue"→"Icy"/"Ice"). When triage surfaces an unmatched phone
+whose tail is a colour word, add it to COLORS (it's never a real model name).
 Brand casing: iPhone, iPad, OnePlus, POCO, iQOO are normalized.
 A trailing "+" is converted to the word "Plus" (Realme 12+ → Realme 12 Plus) so
 make_variant_key (which strips non-alphanumerics) keeps it distinct from the
@@ -233,14 +237,14 @@ image (skips ones already in nobg/). cleanup_r2_images.py keeps `nobg/`. REMBG_M
 env overrides the model.
 
 ### Self-healing triage (triage.py + triage.yml)
-Weekly health loop: detect → diagnose → GitHub issue → human decides → fix.
+Daily health loop: detect → diagnose → GitHub issue → human decides → fix.
 `triage.py` (no writes) surfaces two signals and pre-diagnoses them as a markdown
 issue body: (1) IN-STOCK phones recorded `specs.status='not_found'` that STILL
 don't match the live GSMArena device DB (re-verified via match_with_aliases; stale
 not_founds that would match now are dropped), each with closest_devices()
 candidates; (2) the `missing_images` view (in-stock models with no image). It's
 DB-only-safe: if GSMArena blocks the CI IP it notes that and still reports images.
-`triage.yml` (Sundays 06:00 UTC, ~2h after enrich-specs; + dispatch) runs it and
+`triage.yml` (DAILY 06:00 UTC, ~2h after enrich-specs; + dispatch) runs it and
 UPSERTS one issue (label `triage`, stable title) via `gh` (GITHUB_TOKEN, issues:
 write). A Claude Code session triggered on that issue investigates (cause class:
 clean_model/alias gap, NON_PHONE_KEYWORDS, or genuinely-absent → admin image),

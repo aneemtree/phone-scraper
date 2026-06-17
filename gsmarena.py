@@ -330,8 +330,14 @@ def upsert_specs(model, fields):
     if existing:
         _exec(lambda: supabase.table("specs").update(fields).eq("model", model).execute())
     else:
+        # UPSERT on the variant_key PK (not a plain insert): a specs row keyed by
+        # this model's slug can already exist with a slightly different `model`
+        # string (case/brand-prefix), so the by-model lookup above misses it and a
+        # plain insert hit "duplicate key ... specs_pkey" (23505) and crashed the
+        # whole run. on_conflict updates that row instead; columns not in `row`
+        # (e.g. Beebom's image_url) are preserved.
         row = {"variant_key": make_variant_key(model, None), "model": model, **fields}
-        _exec(lambda: supabase.table("specs").insert(row).execute())
+        _exec(lambda: supabase.table("specs").upsert(row, on_conflict="variant_key").execute())
     _note_op(1)
 
 

@@ -134,6 +134,21 @@ has no real reviews (count must be > 0). Per-store source:
     exposes reviews (re-run it before extending coverage to a new store).
 
 ### Normalization (normalize.py)
+PRINCIPLE — FIX NAMING GLOBALLY, NOT PER-SCRAPER (IMPORTANT): any model-name /
+colour / brand / number cleanup belongs in the SHARED layer — clean_model(),
+COLORS, or the model_aliases table — NEVER in a single store's scraper. A naming
+bug surfaced by ONE store almost always exists at other stores too (they write
+the same phone differently), so a store-local fix just lets it resurface
+elsewhere. Real example: the Nothing "Phone (2)" unwrap was first done only in
+gadgetrebirth's build_model(), so another store's concatenated "Nothingphone"
+slipped through until it was moved into clean_model() (global). Fixing in the
+shared layer also means EXISTING rows self-heal on the next normalize_db Pass 1
+(it re-runs clean_model over every row). A store scraper should ONLY do
+store-SPECIFIC parsing (payload shape, option slot order, availability flags) +
+hand the raw name to clean_model — it must not clean model names itself. Same
+goes for enrichment/DB writes: fix shared helpers (e.g. upsert_specs' on-conflict
+upsert) so the fix covers every caller. When in doubt, ask "would another store
+hit this?" — if yes (almost always for names), it goes in the shared layer.
 All scrapers must pass model names through clean_model() and storage through
 normalize_storage() before calling make_variant_key(). Never save raw names.
 Key noise words already stripped: 5G, 4G, India, With Box, Open Box, Series,

@@ -314,6 +314,11 @@ def clean_model(title: str) -> str:
                r"republic|independence|billion)\b[^:]*:\s*", "", t, flags=re.I)
     t = t.replace(":", " ")  # phones never contain a colon — drop any stray ones
     t = re.sub(r"\b(sale|offer|deals?|festive|bonanza|clearance)\b", " ", t, flags=re.I)
+    # Month / festival names only appear in promo titles (never in a model name),
+    # so strip them too — covers promos written WITHOUT a colon ("November Sale
+    # iPhone 13" -> "iPhone 13", "Diwali Offer Realme 12" -> "Realme 12").
+    t = re.sub(r"\b(january|february|march|april|may|june|july|august|september|"
+               r"october|november|december|diwali|navratri|holi|dussehra|christmas)\b", " ", t, flags=re.I)
     # "Nothingphone"/"NothingPhone" written as ONE word (no space) — some stores
     # concatenate brand+product, so the first-word brand logic never split it and
     # it stayed "Nothingphone". Insert the space EARLY (before the paren/number

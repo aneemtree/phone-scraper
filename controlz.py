@@ -123,6 +123,44 @@ def click_option(page, heading_keyword, label):
     return page.evaluate(js, [heading_keyword.lower(), label])
 
 
+def active_option(page, heading_keyword):
+    """Return the label of the SELECTED button in a section, or None.
+
+    ControlZ marks the selected option with a blue (accent) border — the only
+    reliable selected-state signal (class names are hashed). We detect it by the
+    computed border colour being blue-dominant; unselected options have a grey
+    border. Needed because picking a storage that doesn't belong to the current
+    category silently FLIPS the active category (256GB is Saver-only, so choosing
+    it under "Premium renewed" switches the selection to "Saver Series")."""
+    js = """(kw) => {
+      const isSel = (b) => {
+        const m = (getComputedStyle(b).borderColor || '').match(/\\d+/g);
+        if (m && m.length >= 3) {
+          const r=+m[0], g=+m[1], bl=+m[2];
+          if (bl > 110 && bl >= r + 25 && bl >= g + 25) return true;  // blue-ish = selected
+        }
+        return /\\b(border-primary|ring-|selected|active)\\b/.test(b.className || '');
+      };
+      const h2s = Array.from(document.querySelectorAll('h2'));
+      const h = h2s.find(e => e.textContent.toLowerCase().includes(kw));
+      if (!h) return null;
+      let node = h;
+      for (let i=0; i<6 && node; i++) {
+        node = node.parentElement;
+        if (!node) break;
+        const cont = node.querySelector('.variant-options-container');
+        if (cont) {
+          const b = Array.from(cont.querySelectorAll('button')).find(isSel);
+          if (!b) return null;
+          const s = b.querySelector('span');
+          return (s ? s.textContent : b.textContent).trim();
+        }
+      }
+      return null;
+    }"""
+    return page.evaluate(js, heading_keyword.lower())
+
+
 def read_price(page):
     """Read the 'Starting From' price (the .text-primary <p> near that label)."""
     js = """() => {
@@ -180,39 +218,53 @@ def parse_price(text):
 def scrape_product(page, slug):
     url = f"{BASE_URL}/products/{slug}"
     page.goto(url, timeout=60000, wait_until="domcontentloaded")
-    # Read title from h1 before any early return
-    page_title = page.evaluate("""() => {
-        const h1 = document.querySelector('h1');
-        return h1 ? h1.innerText.trim() : null;
-    }""")
+    read_title = lambda: page.evaluate(
+        "() => { const h1 = document.querySelector('h1'); return h1 ? h1.innerText.trim() : null; }")
     try:
         page.wait_for_selector(".variant-options-container", timeout=20000)
     except Exception:
-        return url, page_title, None, None, None, []
+        # Read the title even on the no-options early-return (it loads with the page).
+        return url, read_title(), None, None, None, []
     page.wait_for_timeout(1200)
+    # Read the h1 AFTER content settles — reading it right after domcontentloaded
+    # returned None (the React title hadn't rendered yet).
+    page_title = read_title()
     image_url = read_image(page)
     rating, review_count = read_rating_reviews(page)
 
-    conditions = section_buttons(page, "category") or ["Premium renewed"]
+    # Category buttons that aren't selected carry a price DELTA ("Saver Series –
+    # ₹7310"); strip it so the label is just the condition name.
+    def clean_cond(s):
+        return re.sub(r"\s*[–-]?\s*₹[\d,]+.*$", "", s or "").strip()
 
-    out = []
+    conditions = [clean_cond(c) for c in (section_buttons(page, "category") or ["Premium renewed"])]
+    storages = section_buttons(page, "storage") or [None]
+
+    out, seen = [], set()
     for cond in conditions:
-        if cond:
-            click_option(page, "category", cond)
-            page.wait_for_timeout(500)
-        # Re-read storages AFTER picking the condition: ControlZ greys out the
-        # storages it doesn't sell in this condition, so the available set differs
-        # per condition. Reading once up front recorded phantom (condition,
-        # storage) combos (e.g. an iPhone shown only in Saver Series also got a
-        # Premium Renewed row). section_buttons already drops greyed options.
-        storages = section_buttons(page, "storage") or [None]
         for st in storages:
+            # Re-select the condition for EVERY storage: picking a storage that
+            # belongs to a different category flips the active category, so the
+            # selection from the previous iteration is stale.
+            if cond:
+                click_option(page, "category", cond)
+                page.wait_for_timeout(400)
             if st:
-                # Skip if this storage isn't actually selectable under this
-                # condition (click_option returns False for a greyed option).
                 if not click_option(page, "storage", st):
                     continue
                 page.wait_for_timeout(500)
+            # PHANTOM-COMBO GUARD: ControlZ shows storages that don't belong to
+            # the selected category, and choosing one silently FLIPS the active
+            # category (e.g. 256GB is Saver-only, so picking it under "Premium
+            # renewed" switches the selection to "Saver Series" — and the price
+            # then shown is the Saver price). So after selecting, read which
+            # category is ACTUALLY selected (the blue-bordered button); if it no
+            # longer matches the intended one, this (condition, storage) combo
+            # doesn't exist — skip it. This kills the mislabeled phantom rows.
+            if cond:
+                active = clean_cond(active_option(page, "category"))
+                if active and normalize_condition(active) != normalize_condition(cond):
+                    continue
             # Get all available colors, click each, keep lowest price
             colors = section_buttons(page, "color")
             available_colors = [c for c in colors if c] if colors else []
@@ -227,7 +279,9 @@ def scrape_product(page, slug):
                 price = min(prices) if prices else None
             else:
                 price = parse_price(read_price(page))
-            if price is not None:
+            key = (normalize_condition(cond), st)
+            if price is not None and key not in seen:
+                seen.add(key)
                 out.append((normalize_condition(cond), st, price))
     return url, page_title, image_url, rating, review_count, out
 

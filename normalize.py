@@ -48,6 +48,11 @@ COLORS = [
     # More leaked colour qualifiers from enrich not_founds: Realme 11 Pro+
     # "Sunrise Beige", Realme 5 Pro "Sparkling Blue" -> "Sparkling".
     "sunrise beige", "sunrise", "sparkling", "beige",
+    # Finish/colour qualifiers left after the base colour is stripped: Redmi 9
+    # Prime "Matte Black"->"Matte", Redmi 11 Prime "Flashy Black"->"Flashy",
+    # Vivo V30 Pro "Andaman Blue"->"Andaman". (NOT "Fusion" — that's a real
+    # Motorola model line.)
+    "matte", "flashy", "andaman",
 ]
 
 # Roman numerals (II-XII) that title-casing would lower-case (e.g. Sony "Xperia 1
@@ -339,6 +344,11 @@ def clean_model(title: str) -> str:
     # vocab Fair/Good/Superb + Excellent/Pristine/Flawless/Problematic.) These
     # blocked the GSMArena match + cross-store merge (surfaced in the enrich run).
     t = re.sub(r"\b(fair|good|superb|excellent|pristine|flawless|problematic)\b", " ", t, flags=re.I)
+    # DEFECT/seller-note text some stores append for damaged units (e.g. Sony
+    # "... Problematic Touch Not Working", "... Only Use", "... Colour"). None are
+    # part of a model name; strip the common phrases so the model stays clean.
+    t = re.sub(r"\b(?:touch|display|screen)?\s*not\s+working\b", " ", t, flags=re.I)
+    t = re.sub(r"\b(only\s+use|for\s+parts|spares?|faulty|damaged|defective|colour|color|down)\b", " ", t, flags=re.I)
     t = re.sub(r"\b\d+\s?(GB|TB)\b", " ", t, flags=re.I) # storage
     # Stray "RAM" label with no number (the number was already stripped as storage
     # above, e.g. "Note 20 RAM , Mystic"). Remove the orphaned keyword + any comma

@@ -45,6 +45,9 @@ COLORS = [
     # Samsung F62 "Laser Grey/Green" -> "Laser"; Pixel 9a "Iris"; Samsung M52
     # "Icy Blue" -> "Icy"/"Ice". None are real model names, so safe to strip.
     "icy blue", "laser", "iris", "icy", "ice",
+    # More leaked colour qualifiers from enrich not_founds: Realme 11 Pro+
+    # "Sunrise Beige", Realme 5 Pro "Sparkling Blue" -> "Sparkling".
+    "sunrise beige", "sunrise", "sparkling", "beige",
 ]
 
 # Roman numerals (II-XII) that title-casing would lower-case (e.g. Sony "Xperia 1
@@ -330,6 +333,12 @@ def clean_model(title: str) -> str:
     # 12" -> ""). "renewed" is removed by the refurb pass below; we strip the
     # remaining "premium"/"saver"/"series" grade words here.
     t = re.sub(r"\b(premium[\s_-]+renewed|saver[\s_-]+series|premium|saver|series)\b", " ", t, flags=re.I)
+    # Condition GRADE words that leak into the model name when a store appends the
+    # grade to the product title (e.g. "Pixel 5A Good", "Realme 12 Pro Plus Good",
+    # "Zenfone 5Z Problematic"). None are ever part of a real model name. (Cashify
+    # vocab Fair/Good/Superb + Excellent/Pristine/Flawless/Problematic.) These
+    # blocked the GSMArena match + cross-store merge (surfaced in the enrich run).
+    t = re.sub(r"\b(fair|good|superb|excellent|pristine|flawless|problematic)\b", " ", t, flags=re.I)
     t = re.sub(r"\b\d+\s?(GB|TB)\b", " ", t, flags=re.I) # storage
     # Stray "RAM" label with no number (the number was already stripped as storage
     # above, e.g. "Note 20 RAM , Mystic"). Remove the orphaned keyword + any comma

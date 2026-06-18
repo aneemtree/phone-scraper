@@ -208,6 +208,71 @@ def parse_price(text):
     return float(digits) if digits else None
 
 
+def parse_delta(full_text):
+    """Parse a storage button's price delta, e.g. "128GB- ₹3000" / "256 GB+ ₹3100"
+    -> signed int rupees, or None if the button carries no delta (an inert /
+    duplicate-group button)."""
+    m = re.search(r"([+\-–])\s*₹\s*([\d,]+)", full_text or "")
+    if not m:
+        return None
+    sign = -1 if m.group(1) in "-–" else 1
+    return sign * int(m.group(2).replace(",", ""))
+
+
+def storage_matrix(page):
+    """Return the storage buttons as [{label, full, sel}] (full = full button text
+    incl any price delta; sel = is it the selected/outline-primary button)."""
+    js = """() => {
+      const h2s = Array.from(document.querySelectorAll('h2'));
+      const h = h2s.find(e => e.textContent.toLowerCase().includes('storage'));
+      if (!h) return [];
+      let node = h;
+      for (let i=0; i<6 && node; i++) {
+        node = node.parentElement;
+        if (!node) break;
+        const cont = node.querySelector('.variant-options-container');
+        if (cont) {
+          return Array.from(cont.querySelectorAll('button')).map(b => ({
+            label: (b.querySelector('span')?.textContent || b.textContent).trim(),
+            full: b.textContent.trim().replace(/\\s+/g, ' '),
+            sel: /\\boutline-primary\\b/.test(b.className || '')
+          }));
+        }
+      }
+      return [];
+    }"""
+    return page.evaluate(js)
+
+
+def parse_variant_table(page):
+    """Read ControlZ's per-unit variant TABLE (columns Battery / Issues / Storage /
+    Colour / Price), present for categories sold as individual graded units (e.g.
+    Saver Series). Returns [{storage, price}] — one entry per row. There can be
+    MULTIPLE rows for the same storage at different prices (different colour /
+    battery / issues); the caller keeps the minimum per storage. Empty when no
+    such table is shown (the category uses the storage-button selector instead)."""
+    js = """() => {
+      for (const t of document.querySelectorAll('table')) {
+        const trs = Array.from(t.querySelectorAll('tr'));
+        if (!trs.length) continue;
+        const head = Array.from(trs[0].querySelectorAll('th,td'))
+                       .map(c => c.innerText.trim().toLowerCase());
+        const si = head.findIndex(h => /storage/.test(h));
+        const pi = head.findIndex(h => /price/.test(h));
+        if (si < 0 || pi < 0) continue;
+        const rows = [];
+        for (const tr of trs.slice(1)) {
+          const cells = Array.from(tr.querySelectorAll('th,td')).map(c => c.innerText.trim());
+          if (cells.length <= Math.max(si, pi)) continue;
+          rows.push({storage: cells[si], price: cells[pi]});
+        }
+        if (rows.length) return rows;
+      }
+      return [];
+    }"""
+    return page.evaluate(js)
+
+
 def scrape_product(page, slug):
     url = f"{BASE_URL}/products/{slug}"
     page.goto(url, timeout=60000, wait_until="domcontentloaded")
@@ -235,51 +300,75 @@ def scrape_product(page, slug):
         return re.sub(r"\s*[–-]?\s*₹[\d,]+.*$", "", s or "").strip()
 
     conditions = [clean_cond(c) for c in (section_buttons(page, "category") or ["Premium renewed"])]
-    storages = section_buttons(page, "storage") or [None]
+
+    # ControlZ renders one of TWO variant UIs depending on the selected category's
+    # stock:
+    #  (A) a per-unit TABLE (Battery / Issues / Storage / Colour / Price) when the
+    #      category is sold as individual graded units (e.g. Saver Series). It can
+    #      list MULTIPLE rows for the same storage at different prices — the lowest
+    #      is the real price. This is the source of truth when present.
+    #  (B) a storage-button selector + a "Starting From" price (e.g. Premium
+    #      renewed). "Starting From" is already the lowest colour price for the
+    #      selected storage; other storages' prices come from each button's signed
+    #      delta ("128GB- ₹3000"). Only buttons in the SELECTED button's label
+    #      format ("128GB" vs "128 GB") belong to this category — ControlZ renders
+    #      a stale duplicate group for the other category which we must ignore.
+    # NO per-storage/colour CLICKING: clicking storages destabilises the page
+    # (it freezes / flips category). We read everything from the initial state +
+    # the table, clicking ONLY the category.
+    def emit(out, seen, cond, storage_label, price):
+        key = (normalize_condition(cond), normalize_storage(storage_label) if storage_label else None)
+        if price is not None and key not in seen:
+            seen.add(key)
+            out.append((normalize_condition(cond), storage_label, price))
 
     out, seen = [], set()
     for cond in conditions:
-        for st in storages:
-            # Re-select the condition for EVERY storage: picking a storage that
-            # belongs to a different category flips the active category, so the
-            # selection from the previous iteration is stale.
-            if cond:
-                click_option(page, "category", cond)
-                page.wait_for_timeout(400)
-            if st:
-                if not click_option(page, "storage", st):
+        if cond:
+            click_option(page, "category", cond)
+            page.wait_for_timeout(1500)  # the table / price needs time to render
+            # The category click can be ignored if the option isn't really there.
+            active = clean_cond(active_option(page, "category"))
+            if active and normalize_condition(active) != normalize_condition(cond):
+                continue
+
+        # (A) per-unit table — take the LOWEST price per storage across all rows.
+        rows = parse_variant_table(page)
+        if rows:
+            by_storage = {}
+            for r in rows:
+                pr = parse_price(r.get("price"))
+                stg = (r.get("storage") or "").strip()
+                if pr is None or not stg:
                     continue
-                page.wait_for_timeout(500)
-            # PHANTOM-COMBO GUARD: ControlZ shows storages that don't belong to
-            # the selected category, and choosing one silently FLIPS the active
-            # category (e.g. 256GB is Saver-only, so picking it under "Premium
-            # renewed" switches the selection to "Saver Series" — and the price
-            # then shown is the Saver price). So after selecting, read which
-            # category is ACTUALLY selected (the blue-bordered button); if it no
-            # longer matches the intended one, this (condition, storage) combo
-            # doesn't exist — skip it. This kills the mislabeled phantom rows.
-            if cond:
-                active = clean_cond(active_option(page, "category"))
-                if active and normalize_condition(active) != normalize_condition(cond):
-                    continue
-            # Get all available colors, click each, keep lowest price
-            colors = section_buttons(page, "color")
-            available_colors = [c for c in colors if c] if colors else []
-            if available_colors:
-                prices = []
-                for color in available_colors:
-                    click_option(page, "color", color)
-                    page.wait_for_timeout(400)
-                    p_val = parse_price(read_price(page))
-                    if p_val is not None:
-                        prices.append(p_val)
-                price = min(prices) if prices else None
+                nk = normalize_storage(stg)
+                if nk not in by_storage or pr < by_storage[nk][1]:
+                    by_storage[nk] = (stg, pr)
+            for stg, pr in by_storage.values():
+                emit(out, seen, cond, stg, pr)
+            continue
+
+        # (B) storage-button selector — base "Starting From" + per-button deltas.
+        base = parse_price(read_price(page))
+        btns = storage_matrix(page)
+        if not btns:
+            # No storage axis at all — single price for the whole category.
+            emit(out, seen, cond, None, base)
+            continue
+        sel = next((b for b in btns if b["sel"]), None)
+        sel_has_space = (" " in sel["label"]) if sel else None
+        for b in btns:
+            # Restrict to the live group (same label format as the selected button).
+            if sel_has_space is not None and (" " in b["label"]) != sel_has_space:
+                continue
+            if b["sel"]:
+                price = base
             else:
-                price = parse_price(read_price(page))
-            key = (normalize_condition(cond), st)
-            if price is not None and key not in seen:
-                seen.add(key)
-                out.append((normalize_condition(cond), st, price))
+                d = parse_delta(b["full"])
+                if d is None or base is None:
+                    continue  # inert / duplicate-group button (no price info)
+                price = base + d
+            emit(out, seen, cond, b["label"], price)
     return url, page_title, image_url, rating, review_count, out
 
 

@@ -1,272 +1,201 @@
 """
-ControlZ scraper (Playwright). Reads exactly what shoppers see.
+ControlZ scraper — REQUESTS-ONLY (no Playwright).
 
-Per product, per CONDITION (Premium renewed / Saver Series / ...), per STORAGE,
-reads the visible "Starting From" price. Keeps the lowest price per
-(variant_key, condition). Color / battery / issues are ignored.
+The product page embeds a complete JSON-LD `Product.offers[]` inside its Next.js
+RSC payload (self.__next_f.push). Each Offer is one real variant:
+  sku   = "Apple iPhone 13 (256GB) Blue Saver Series (AP13_256_00034)"
+  price = "27879"  (INR, string)
+  availability = http://schema.org/InStock | OutOfStock
+  url   = ...?variant=<id>   (deep-link)
+We parse storage + cosmetic grade from the sku, keep the LOWEST in-stock price
+per (variant_key, grade), and save one row per (variant_key, condition). This
+replaced the old Playwright DOM-clicking, which iterated conditions × storages
+as a full matrix and recorded phantom (condition, storage) combos the store
+doesn't offer (and duplicated multi-storage phones). The JSON-LD lists only real
+variants with their true availability, so no phantoms, no duplicates, no browser.
 
-Robust choices:
- - desktop viewport (nothing collapses)
- - wait_for_selector, not networkidle (site never idles)
- - scope CONDITION options to the Category section; STORAGE options to the
-   Storage section; read price from the "Starting From" block (.text-primary)
-
-Run with:  python3 controlz.py
+Run:  python3 controlz.py [--dry]
 """
 import re
 import json
+import sys
 import time
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from playwright.sync_api import sync_playwright
-from normalize import clean_model, normalize_storage, normalize_ram, make_variant_key, parse_size_string, normalize_condition, is_phone
+from normalize import clean_model, normalize_storage, normalize_ram, make_variant_key, normalize_condition, is_phone
 from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
 from obs import init_sentry, log_error
 
 SITE = "controlz"
 LISTING_URL = "https://www.controlz.world/store"
 BASE_URL = "https://www.controlz.world"
-DELAY_SECONDS = 1.5
-WORKERS = 5  # concurrent product browsers
+WORKERS = 8  # concurrent product fetches (requests, I/O-bound)
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
 
+def _payload(text):
+    """Join the Next.js RSC chunks into one decoded string."""
+    chunks = re.findall(r'self\.__next_f\.push\(\[\d+,(".*?")\]\)', text, re.S)
+    return "".join(json.loads(c) for c in chunks if c.startswith('"'))
+
+
 def get_product_slugs():
-    """Get all product slugs from ControlZ listing page RSC payload.
-    Uses the adjacent productType+slug pattern which is reliable.
-    Titles are not extracted here — they're read from the product page during scraping.
-    """
+    """All phone product slugs from the listing RSC payload (productType=phone)."""
     resp = requests.get(LISTING_URL, headers={"User-Agent": UA}, timeout=30)
     resp.raise_for_status()
-    chunks = re.findall(r'self\.__next_f\.push\(\[\d+,(".*?")\]\)', resp.text, re.S)
-    payload = "".join(json.loads(c) for c in chunks if c.startswith('"'))
-
-    SKIP_SLUGS = {"power-bank", "powerbank", "charger", "cable", "case", "cover",
-                  "earphone", "headphone", "adapter", "hub", "stand"}
-
+    payload = _payload(resp.text)
+    SKIP = {"power-bank", "powerbank", "charger", "cable", "case", "cover",
+            "earphone", "headphone", "adapter", "hub", "stand"}
     seen, products = set(), []
     for m in re.finditer(r'"productType":"phone","slug":"([^"]+)"', payload):
-        slug_val = m.group(1)
-        if slug_val in seen:
+        slug = m.group(1)
+        if slug in seen:
             continue
-        if slug_val in SKIP_SLUGS or any(sk in slug_val for sk in SKIP_SLUGS) or not is_phone("", slug_val):
+        if slug in SKIP or any(sk in slug for sk in SKIP) or not is_phone("", slug):
             continue
-        seen.add(slug_val)
-        products.append({"slug": slug_val, "title": slug_val})  # title read from product page
+        seen.add(slug)
+        products.append(slug)
     return products
 
 
-def section_buttons(page, heading_keyword):
-    """Return the option buttons under the section whose <h2> contains keyword.
-    We find the h2, then its nearest following .variant-options-container."""
-    js = """(kw) => {
-      const h2s = Array.from(document.querySelectorAll('h2'));
-      const h = h2s.find(e => e.textContent.toLowerCase().includes(kw));
-      if (!h) return [];
-      // walk up to a container that holds both heading and options
-      let node = h;
-      for (let i=0; i<6 && node; i++) {
-        node = node.parentElement;
-        if (!node) break;
-        const cont = node.querySelector('.variant-options-container');
-        if (cont) {
-          return Array.from(cont.querySelectorAll('button')).map(b => {
-            const s = b.querySelector('span');
-            return (s ? s.textContent : b.textContent).trim();
-          });
-        }
-      }
-      return [];
-    }"""
-    return page.evaluate(js, heading_keyword.lower())
-
-
-def click_option(page, heading_keyword, label):
-    """Click the button under the given section whose text matches label."""
-    js = """([kw, lbl]) => {
-      const h2s = Array.from(document.querySelectorAll('h2'));
-      const h = h2s.find(e => e.textContent.toLowerCase().includes(kw));
-      if (!h) return false;
-      let node = h;
-      for (let i=0; i<6 && node; i++) {
-        node = node.parentElement;
-        if (!node) break;
-        const cont = node.querySelector('.variant-options-container');
-        if (cont) {
-          const btns = Array.from(cont.querySelectorAll('button'));
-          const b = btns.find(x => (x.querySelector('span')?.textContent || x.textContent).trim().includes(lbl));
-          if (b) { b.click(); return true; }
-        }
-      }
-      return false;
-    }"""
-    return page.evaluate(js, [heading_keyword.lower(), label])
-
-
-def read_price(page):
-    """Read the 'Starting From' price (the .text-primary <p> near that label)."""
-    js = """() => {
-      const ps = Array.from(document.querySelectorAll('p'));
-      // find a price <p> with class text-primary containing a rupee figure
-      const pe = ps.find(p => /text-primary/.test(p.className) && /₹\\s?[\\d,]{3,}/.test(p.textContent));
-      return pe ? pe.textContent.trim() : null;
-    }"""
-    return page.evaluate(js)
-
-
-
-def read_image(page):
-    """Grab the main product image from the rendered page, unwrapping Next.js
-    /_next/image?url=<real> optimizer URLs to the real CDN link."""
-    js = """() => {
-      const imgs = Array.from(document.querySelectorAll('img'));
-      const pick = imgs.find(i => /cloudfront/.test(i.src) && i.naturalWidth > 100)
-                || imgs.find(i => i.naturalWidth > 200);
-      return pick ? pick.src : null;
-    }"""
-    raw = page.evaluate(js)
-    if raw and "/_next/image" in raw:
-        import urllib.parse as up
-        q = up.urlparse(raw).query
-        u = up.parse_qs(q).get("url", [None])[0]
-        if u:
-            return up.unquote(u)
-    return raw
-
-
-
-def read_rating_reviews(page):
-    """Read rating (e.g. 4.7) and review count (e.g. 21) from the rendered page.
-    The header shows something like '4.7 . 21 REVIEWS'. Returns (rating, count)."""
-    js = """() => {
-      const txt = document.body.innerText;
-      const m = txt.match(/([0-9](?:\\.[0-9])?)\\s*[·.]\\s*([0-9]+)\\s*REVIEWS/i);
-      if (m) return {rating: m[1], count: m[2]};
-      const m2 = txt.match(/([0-9]+)\\s*REVIEWS/i);
-      if (m2) return {rating: null, count: m2[1]};
-      return {rating: null, count: null};
-    }"""
-    r = page.evaluate(js)
-    rating = float(r["rating"]) if r and r.get("rating") else None
-    count = int(r["count"]) if r and r.get("count") else None
-    return rating, count
-
-
-def parse_price(text):
-    digits = re.sub(r"[^\d]", "", text or "")
-    return float(digits) if digits else None
-
-
-def scrape_product(page, slug):
-    url = f"{BASE_URL}/products/{slug}"
-    page.goto(url, timeout=60000, wait_until="domcontentloaded")
-    # Read title from h1 before any early return
-    page_title = page.evaluate("""() => {
-        const h1 = document.querySelector('h1');
-        return h1 ? h1.innerText.trim() : null;
-    }""")
+def _extract_offers(payload):
+    """The main product's JSON-LD offers[] (the first `"offers":[`), bracket-
+    balanced. Returns the parsed list, or [] if absent."""
+    i = payload.find('"offers":[')
+    if i < 0:
+        return [], 0, 0
+    start = payload.index('[', i)
+    depth = 0
+    end = None
+    for j in range(start, len(payload)):
+        c = payload[j]
+        if c == '[':
+            depth += 1
+        elif c == ']':
+            depth -= 1
+            if depth == 0:
+                end = j + 1
+                break
+    if end is None:
+        return [], start, start
     try:
-        page.wait_for_selector(".variant-options-container", timeout=20000)
+        return json.loads(payload[start:end]), start, end
     except Exception:
-        return url, page_title, None, None, None, []
-    page.wait_for_timeout(1200)
-    image_url = read_image(page)
-    rating, review_count = read_rating_reviews(page)
-
-    conditions = section_buttons(page, "category") or ["Premium renewed"]
-    storages = section_buttons(page, "storage") or [None]
-
-    out = []
-    for cond in conditions:
-        if cond:
-            click_option(page, "category", cond)
-            page.wait_for_timeout(500)
-        for st in storages:
-            if st:
-                click_option(page, "storage", st)
-                page.wait_for_timeout(500)
-            # Get all available colors, click each, keep lowest price
-            colors = section_buttons(page, "color")
-            available_colors = [c for c in colors if c] if colors else []
-            if available_colors:
-                prices = []
-                for color in available_colors:
-                    click_option(page, "color", color)
-                    page.wait_for_timeout(400)
-                    p_val = parse_price(read_price(page))
-                    if p_val is not None:
-                        prices.append(p_val)
-                price = min(prices) if prices else None
-            else:
-                price = parse_price(read_price(page))
-            if price is not None:
-                out.append((normalize_condition(cond), st, price))
-    return url, page_title, image_url, rating, review_count, out
+        return [], start, end
 
 
-def scrape_one(slug):
-    """Open an isolated headless browser for ONE product and scrape it. Each
-    worker gets its own Playwright instance + browser so products can run
-    concurrently (sync Playwright is not shareable across threads). Returns the
-    scrape_product() tuple (url, title, image, rating, reviews, rows)."""
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
-        page = browser.new_page(user_agent=UA, viewport={"width": 1366, "height": 900})
+def grade_from_sku(sku):
+    """Cosmetic grade from the sku; no grade word = the default 'Premium Renewed'."""
+    s = sku.lower()
+    if "saver series" in s:
+        return "Saver Series"
+    if "special series" in s:
+        return "Special Series"
+    if "premium renewed" in s:
+        return "Premium Renewed"
+    return "Premium Renewed"
+
+
+def storage_from_sku(sku):
+    m = re.search(r"\(\s*(\d+)\s*(gb|tb)\s*\)", sku, re.I)
+    return normalize_storage(f"{m.group(1)}{m.group(2)}") if m else None
+
+
+def fetch_offers(slug):
+    """Fetch one product, return (url, model, image_url, rating, review_count, rows)
+    where rows = [(condition, storage, price, variant_url)] for IN-STOCK offers,
+    or (..., None, ...) on a non-phone / no-offers page."""
+    url = f"{BASE_URL}/products/{slug}"
+    r = requests.get(url, headers={"User-Agent": UA}, timeout=30)
+    r.raise_for_status()
+    payload = _payload(r.text)
+    offers, start, end = _extract_offers(payload)
+    if not offers:
+        return url, None, None, None, None, []
+
+    # Model = the common sku prefix (everything before the first " (").
+    model = clean_model(offers[0].get("sku", "").split(" (")[0].strip())
+    if not model or not is_phone(model, slug):
+        return url, None, None, None, None, []
+
+    # Rating + image from the same Product JSON-LD block (window around offers).
+    win = payload[max(0, start - 3000):end + 1000]
+    rating = review_count = None
+    mr = re.search(r'"aggregateRating":\{[^{}]*?"ratingValue":"?([\d.]+)"?[^{}]*?"reviewCount":"?(\d+)"?', win)
+    if mr:
         try:
-            return scrape_product(page, slug)
-        finally:
-            browser.close()
+            rating, review_count = float(mr.group(1)), int(mr.group(2))
+            if not (rating > 0 and review_count > 0):
+                rating = review_count = None
+        except Exception:
+            rating = review_count = None
+    mi = re.search(r'"image":\["(https://[^"]+)"', win)
+    image_url = mi.group(1) if mi else None
+
+    rows = []
+    for o in offers:
+        sku = o.get("sku", "")
+        if "instock" not in (o.get("availability", "").lower()):
+            continue  # only what's actually available
+        st = storage_from_sku(sku)
+        try:
+            price = float(re.sub(r"[^\d.]", "", str(o.get("price", "")))) or None
+        except Exception:
+            price = None
+        if price is None:
+            continue
+        rows.append((normalize_condition(grade_from_sku(sku)), st, price, o.get("url") or url))
+    return url, model, image_url, rating, review_count, rows
 
 
-def scrape():
+def scrape(dry=False):
     from datetime import datetime, timezone
     run_started_at = datetime.now(timezone.utc).isoformat()
-    mark_site_oos("controlz")
-    products = get_product_slugs()
-    print(f"Found {len(products)} products to visit ({WORKERS} workers).")
-    best = {}
+    if not dry:
+        mark_site_oos("controlz")
+    slugs = get_product_slugs()
+    print(f"Found {len(slugs)} products ({WORKERS} workers).")
+
+    best = {}        # (variant_key, condition) -> candidate (lowest in-stock price)
     read_ok = 0
 
     with ThreadPoolExecutor(max_workers=WORKERS) as ex:
-        futures = {ex.submit(scrape_one, prod["slug"]): prod for prod in products}
+        futures = {ex.submit(fetch_offers, slug): slug for slug in slugs}
         for fut in as_completed(futures):
-            prod = futures[fut]
-            slug, parent_title = prod["slug"], prod["title"]
+            slug = futures[fut]
             try:
-                url, page_title, image_url, rating, review_count, rows = fut.result()
+                url, model, image_url, rating, review_count, rows = fut.result()
             except Exception as e:
                 print(f"  {slug}: ERROR {str(e)[:80]}")
                 log_error(e, site=SITE, slug=slug)
                 continue
-            read_ok += 1            # page scraped without error (rows may be empty)
-
-            # Filter non-phones by the ACTUAL product title, not just the slug.
-            # The slug-level is_phone() check at collection time misses items whose
-            # slug looks phone-ish but whose title is an accessory (e.g. a power
-            # bank tagged productType "phone" in the listing payload).
-            model = clean_model(page_title or parent_title)
-            if not model or not is_phone(model, slug):
-                print(f"  {slug}: skipped (not a phone: {page_title!r})")
+            read_ok += 1
+            if not model:
+                print(f"  {slug}: skipped (no offers / not a phone)")
                 continue
-
-            for cond, st, price in rows:
-                storage = normalize_storage(st) if st else None
-                ram = normalize_ram(parent_title)
+            for cond, st, price, vurl in rows:
+                storage = st
+                ram = None
                 vkey = make_variant_key(model, storage, ram)
                 key = (vkey, cond)
                 cand = {"model": model, "storage": storage, "ram": ram,
                         "variant_key": vkey, "condition": cond, "price": price,
-                        "url": url, "image_url": image_url,
+                        "url": vurl, "image_url": image_url,
                         "rating": rating, "review_count": review_count,
                         "name": f"{model} {storage or ''}".strip()}
                 if key not in best or price < best[key]["price"]:
                     best[key] = cand
-            print(f"  {slug}: {len(rows)} price points")
+            print(f"  {slug}: {len(rows)} in-stock offers -> {model}")
+
+    if dry:
+        print(f"\n[DRY] {len(best)} (variant, condition) offers:")
+        for (vkey, cond), o in sorted(best.items()):
+            print(f"  {vkey:34} [{cond:16}] ₹{o['price']:.0f}")
+        return
 
     saved = 0
     for (vkey, cond), o in best.items():
-        # Self-host the image on first sighting; fall back to source URL on failure.
         hosted = None
         if o["image_url"]:
             ext = ".jpg"
@@ -275,7 +204,6 @@ def scrape():
             dest = f"{SITE}/{o['variant_key']}{ext}".replace("|", "_")
             hosted = ensure_image(o["image_url"], dest)
         final_image = hosted or o["image_url"]
-
         pid = save_phone(SITE, o["name"], o["url"], final_image,
                          o["model"], o["storage"], o["ram"], o["variant_key"])
         save_price(pid, o["price"], availability="in_stock", condition=o["condition"],
@@ -283,20 +211,19 @@ def scrape():
         saved += 1
         print(f"  saved: {o['name']:28} [{cond:16}] ₹{o['price']:.0f}")
 
-    # Gate the OOS sweep on scraper HEALTH: fraction of product pages scraped
-    # without error (a block/Playwright failure collapses read_ok -> skip sweep).
-    ratio = (read_ok / len(products)) if products else 0.0
-    run_complete = bool(products) and ratio >= 0.7
-    print(f"Read OK: {read_ok}/{len(products)} ({ratio*100:.0f}%) — run_complete={run_complete}")
+    ratio = (read_ok / len(slugs)) if slugs else 0.0
+    run_complete = bool(slugs) and ratio >= 0.7
+    print(f"Read OK: {read_ok}/{len(slugs)} ({ratio*100:.0f}%) — run_complete={run_complete}")
     mark_unseen_out_of_stock(SITE, run_started_at, run_complete=run_complete)
-
     print(f"\nDone. Saved {saved} (variant, condition) offers from {SITE}.")
 
 
 if __name__ == "__main__":
-    init_sentry(SITE)
+    dry = "--dry" in sys.argv
+    if not dry:
+        init_sentry(SITE)
     try:
-        scrape()
+        scrape(dry=dry)
     except Exception as e:
         log_error(e, site=SITE, phase="scrape")
         raise

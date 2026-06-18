@@ -154,6 +154,35 @@ def active_option(page, heading_keyword):
     return page.evaluate(js, heading_keyword.lower())
 
 
+def click_table_row(page, storage_text, price_text):
+    """Click the variant-table row matching (storage, price) and return the page
+    URL afterwards (ControlZ updates it to ?variant=<id> on selection — the only
+    place the per-unit variant id is exposed; it is NOT in any DOM attribute).
+    Returns None if no row matches. Called only AFTER prices are read, so a click
+    can never corrupt the captured prices."""
+    js = """([stg, prc]) => {
+      const norm = s => (s||'').replace(/\\s/g,'');
+      for (const t of document.querySelectorAll('table')) {
+        const trs = Array.from(t.querySelectorAll('tr'));
+        if (!trs.length) continue;
+        const head = Array.from(trs[0].querySelectorAll('th,td')).map(c => c.innerText.trim().toLowerCase());
+        const si = head.findIndex(h => /storage/.test(h));
+        const pi = head.findIndex(h => /price/.test(h));
+        if (si < 0 || pi < 0) continue;
+        for (const tr of trs.slice(1)) {
+          const cells = Array.from(tr.querySelectorAll('th,td')).map(c => c.innerText.trim());
+          if (cells.length <= Math.max(si, pi)) continue;
+          if (cells[si] === stg && norm(cells[pi]) === norm(prc)) { tr.click(); return true; }
+        }
+      }
+      return false;
+    }"""
+    if page.evaluate(js, [storage_text, price_text]):
+        page.wait_for_timeout(600)
+        return page.url
+    return None
+
+
 def read_price(page):
     """Read the 'Starting From' price (the .text-primary <p> near that label)."""
     js = """() => {
@@ -316,11 +345,16 @@ def scrape_product(page, slug):
     # NO per-storage/colour CLICKING: clicking storages destabilises the page
     # (it freezes / flips category). We read everything from the initial state +
     # the table, clicking ONLY the category.
-    def emit(out, seen, cond, storage_label, price):
+    # Per-variant DEEP-LINK (?variant=<id>): the id is exposed ONLY in the URL
+    # after selecting the row/button (not in any DOM attribute). Prices are read
+    # FIRST (from cells / deltas), then we click the chosen variant purely to read
+    # its URL — a click can't corrupt the already-captured price, and any failure
+    # falls back to the bare product URL.
+    def emit(out, seen, cond, storage_label, price, vurl):
         key = (normalize_condition(cond), normalize_storage(storage_label) if storage_label else None)
         if price is not None and key not in seen:
             seen.add(key)
-            out.append((normalize_condition(cond), storage_label, price))
+            out.append((normalize_condition(cond), storage_label, price, vurl or url))
 
     out, seen = [], set()
     for cond in conditions:
@@ -343,9 +377,14 @@ def scrape_product(page, slug):
                     continue
                 nk = normalize_storage(stg)
                 if nk not in by_storage or pr < by_storage[nk][1]:
-                    by_storage[nk] = (stg, pr)
-            for stg, pr in by_storage.values():
-                emit(out, seen, cond, stg, pr)
+                    by_storage[nk] = (stg, pr, r.get("price"))  # keep price text to match the row
+            for stg, pr, ptext in by_storage.values():
+                vurl = None
+                try:
+                    vurl = click_table_row(page, stg, ptext)
+                except Exception:
+                    vurl = None
+                emit(out, seen, cond, stg, pr, vurl)
             continue
 
         # (B) storage-button selector — base "Starting From" + per-button deltas.
@@ -353,10 +392,11 @@ def scrape_product(page, slug):
         btns = storage_matrix(page)
         if not btns:
             # No storage axis at all — single price for the whole category.
-            emit(out, seen, cond, None, base)
+            emit(out, seen, cond, None, base, page.url)
             continue
         sel = next((b for b in btns if b["sel"]), None)
         sel_has_space = (" " in sel["label"]) if sel else None
+        picks = []
         for b in btns:
             # Restrict to the live group (same label format as the selected button).
             if sel_has_space is not None and (" " in b["label"]) != sel_has_space:
@@ -368,7 +408,20 @@ def scrape_product(page, slug):
                 if d is None or base is None:
                     continue  # inert / duplicate-group button (no price info)
                 price = base + d
-            emit(out, seen, cond, b["label"], price)
+            picks.append((b["label"], price))
+        for label, price in picks:
+            # Click the storage button only to read its deep-link URL; discard the
+            # URL if the click flipped the category (then fall back to product URL).
+            vurl = None
+            try:
+                if click_option(page, "storage", label):
+                    page.wait_for_timeout(600)
+                    active = clean_cond(active_option(page, "category"))
+                    if not (cond and active and normalize_condition(active) != normalize_condition(cond)):
+                        vurl = page.url
+            except Exception:
+                vurl = None
+            emit(out, seen, cond, label, price, vurl)
     return url, page_title, image_url, rating, review_count, out
 
 
@@ -419,14 +472,14 @@ def scrape():
                 print(f"  {slug}: skipped (not a phone: {page_title!r})")
                 continue
 
-            for cond, st, price in rows:
+            for cond, st, price, vurl in rows:
                 storage = normalize_storage(st) if st else None
                 ram = normalize_ram(parent_title)
                 vkey = make_variant_key(model, storage, ram)
                 key = (vkey, cond)
                 cand = {"model": model, "storage": storage, "ram": ram,
                         "variant_key": vkey, "condition": cond, "price": price,
-                        "url": url, "image_url": image_url,
+                        "url": vurl or url, "image_url": image_url,
                         "rating": rating, "review_count": review_count,
                         "name": f"{model} {storage or ''}".strip()}
                 if key not in best or price < best[key]["price"]:

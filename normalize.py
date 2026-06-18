@@ -430,6 +430,11 @@ def clean_model(title: str) -> str:
     # phone. Collapse the redundant "Moto" so all become "Motorola X" (one card).
     t = re.sub(r"\bmotorola\s+moto\b", "Motorola", t, flags=re.I)
     t = re.sub(r"\bmoto\b", "Motorola", t, flags=re.I)
+    # "Fusion" is a colour qualifier for Redmi/others (e.g. Redmi Note 13 "Fusion
+    # …") BUT a real Motorola model line (Edge 50 Fusion). Strip it only when this
+    # isn't a Motorola phone (runs after Moto->Motorola above so the brand shows).
+    if not re.search(r"\bmotorola\b", t, re.I):
+        t = re.sub(r"\bfusion\b", " ", t, flags=re.I)
     # Samsung's Galaxy lines are sometimes listed WITHOUT the "Galaxy" word
     # (itradeit: "Samsung S25 Ultra", "Samsung Note 20"). Insert it so the key
     # matches the stores that include it ("Samsung Galaxy S25 Ultra"). Only when

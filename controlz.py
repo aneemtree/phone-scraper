@@ -126,21 +126,14 @@ def click_option(page, heading_keyword, label):
 def active_option(page, heading_keyword):
     """Return the label of the SELECTED button in a section, or None.
 
-    ControlZ marks the selected option with a blue (accent) border — the only
-    reliable selected-state signal (class names are hashed). We detect it by the
-    computed border colour being blue-dominant; unselected options have a grey
-    border. Needed because picking a storage that doesn't belong to the current
-    category silently FLIPS the active category (256GB is Saver-only, so choosing
-    it under "Premium renewed" switches the selection to "Saver Series")."""
+    ControlZ marks the SELECTED option with the Tailwind class `outline-primary`
+    (the accent outline); unselected options carry `outline-textSecondary` (grey).
+    That class is the only reliable selected-state signal. Needed because picking
+    a storage that doesn't belong to the current category silently FLIPS the
+    active category (256GB is Saver-only, so choosing it under "Premium renewed"
+    switches the selection to "Saver Series")."""
     js = """(kw) => {
-      const isSel = (b) => {
-        const m = (getComputedStyle(b).borderColor || '').match(/\\d+/g);
-        if (m && m.length >= 3) {
-          const r=+m[0], g=+m[1], bl=+m[2];
-          if (bl > 110 && bl >= r + 25 && bl >= g + 25) return true;  // blue-ish = selected
-        }
-        return /\\b(border-primary|ring-|selected|active)\\b/.test(b.className || '');
-      };
+      const isSel = (b) => /\\boutline-primary\\b/.test(b.className || '');
       const h2s = Array.from(document.querySelectorAll('h2'));
       const h = h2s.find(e => e.textContent.toLowerCase().includes(kw));
       if (!h) return null;
@@ -227,8 +220,12 @@ def scrape_product(page, slug):
         return url, read_title(), None, None, None, []
     page.wait_for_timeout(1200)
     # Read the h1 AFTER content settles — reading it right after domcontentloaded
-    # returned None (the React title hadn't rendered yet).
+    # returned None (the React title hadn't rendered yet). The h1 carries a
+    # marketing suffix ("Apple iPhone 13 - Certified Refurbished | ControlZ") —
+    # keep only the model name (everything before the first " - " or " | ").
     page_title = read_title()
+    if page_title:
+        page_title = re.split(r"\s+[-|]\s+", page_title)[0].strip()
     image_url = read_image(page)
     rating, review_count = read_rating_reviews(page)
 

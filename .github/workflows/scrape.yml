@@ -2,9 +2,19 @@ name: Scrape phone prices
 
 on:
   schedule:
-    # Every 3 hours (UTC). Best-effort; GitHub cron can run late.
+    # Every 3 hours (UTC). Best-effort; GitHub cron can run late, so an external
+    # scheduler can ALSO drive this on a reliable cadence via repository_dispatch.
     - cron: "0 */3 * * *"
   workflow_dispatch:
+  # External trigger: any scheduler (cron-job.org, a Vercel/other cron, etc.)
+  # POSTs to the repo dispatches endpoint to run this every 3h:
+  #   curl -X POST -H "Authorization: Bearer <PAT>" \
+  #        -H "Accept: application/vnd.github+json" \
+  #        https://api.github.com/repos/aneemtree/phone-scraper/dispatches \
+  #        -d '{"event_type":"scrape"}'
+  # PAT scope: `repo` (classic) or fine-grained Actions: read/write on this repo.
+  repository_dispatch:
+    types: [scrape]
 
 permissions:
   contents: read

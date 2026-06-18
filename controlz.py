@@ -23,8 +23,13 @@ import time
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from normalize import clean_model, normalize_storage, normalize_ram, make_variant_key, normalize_condition, is_phone
-from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
-from obs import init_sentry, log_error
+# obs/db are imported LAZILY (db only when actually writing) so `--dry` validates
+# with just `requests` + `normalize`, no Supabase/httpx deps needed.
+try:
+    from obs import init_sentry, log_error
+except Exception:  # deps absent in a bare/local env (e.g. running --dry)
+    def init_sentry(*a, **k): pass
+    def log_error(*a, **k): pass
 
 SITE = "controlz"
 LISTING_URL = "https://www.controlz.world/store"
@@ -153,6 +158,7 @@ def scrape(dry=False):
     from datetime import datetime, timezone
     run_started_at = datetime.now(timezone.utc).isoformat()
     if not dry:
+        from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
         mark_site_oos("controlz")
     slugs = get_product_slugs()
     print(f"Found {len(slugs)} products ({WORKERS} workers).")

@@ -14,9 +14,21 @@ from gsmarena import (_fetch_all, load_devices, load_aliases,
                       match_with_aliases, closest_devices)
 
 
-def in_stock_models():
+def all_models():
+    """Every distinct phone model + a set of those currently in stock. We check
+    ALL phones (not just in-stock) because a bad/leaked name produces a stray
+    variant that's usually OUT OF STOCK — exactly the not_founds we want to catch
+    and clean. Returns (sorted list of all models, set of in-stock models)."""
     rows = _fetch_all("phones", "model,in_stock")
-    return sorted({(r.get("model") or "") for r in rows if r.get("in_stock")} - {""})
+    allm, instock = set(), set()
+    for r in rows:
+        m = (r.get("model") or "").strip()
+        if not m:
+            continue
+        allm.add(m)
+        if r.get("in_stock"):
+            instock.add(m)
+    return sorted(allm), instock
 
 
 def not_found_set():
@@ -63,21 +75,26 @@ def scraper_health():
 
 def main():
     nf = not_found_set()
-    stock = in_stock_models()
+    models, instock = all_models()
 
-    # Re-verify each in-stock not_found against the live device DB (a stale
-    # not_found that WOULD match now is dropped — it self-heals next enrich).
+    # Re-verify EVERY not_found (in-stock + OOS) against the live device DB. A
+    # stale not_found that WOULD match now is dropped (self-heals next enrich);
+    # the rest are real misses — usually a name leak that left a stray OOS
+    # variant, which is exactly what we want to surface + fix in clean_model.
+    # In-stock ones are listed first (higher priority).
     unmatched, gsm_note = [], None
     try:
         devices = load_devices()
         aliases = load_aliases()
-        for m in stock:
+        for m in models:
             if m.lower() not in nf:
                 continue
             device, _ = match_with_aliases(m, devices, aliases)
             if device:
                 continue
-            unmatched.append((m, closest_devices(m, devices)))
+            unmatched.append((m, m in instock, closest_devices(m, devices)))
+        # in-stock first, then alphabetical
+        unmatched.sort(key=lambda u: (not u[1], u[0].lower()))
     except Exception as e:
         gsm_note = f"GSMArena device DB unreachable from CI ({e}); run `python3 gsmarena.py --audit` locally to diagnose matches."
 
@@ -88,19 +105,22 @@ def main():
     out.append(f"_Auto-generated daily. {len(unmatched)} unmatched spec(s), "
                f"{len(imgs)} model(s) with no image._\n")
 
-    out.append("### Phones GSMArena couldn't match (in stock)\n")
+    out.append("### Phones GSMArena couldn't match (all stock states)\n")
     if gsm_note:
         out.append(f"> {gsm_note}\n")
     elif unmatched:
-        out.append("Likely a name-normalization gap (fix `clean_model()` or add a "
-                   "`model_aliases` row), a non-phone (add to `NON_PHONE_KEYWORDS`), "
-                   "or genuinely absent on GSMArena (admin image upload).\n")
-        out.append("| Our model | Closest GSMArena names |")
-        out.append("|---|---|")
-        for m, cand in unmatched:
-            out.append(f"| {m} | {', '.join(cand) or '—'} |")
+        n_instock = sum(1 for u in unmatched if u[1])
+        out.append(f"{n_instock} in stock, {len(unmatched) - n_instock} out of stock. "
+                   "Likely a name-normalization leak (fix `clean_model()`/`COLORS` or add "
+                   "a `model_aliases` row), a non-phone (add to `NON_PHONE_KEYWORDS`), or "
+                   "genuinely absent on GSMArena (admin image upload). OOS ones are usually "
+                   "stray leaked-name variants — fixing clean_model merges them away.\n")
+        out.append("| Our model | Stock | Closest GSMArena names |")
+        out.append("|---|---|---|")
+        for m, in_stock, cand in unmatched:
+            out.append(f"| {m} | {'in stock' if in_stock else 'OOS'} | {', '.join(cand) or '—'} |")
     else:
-        out.append("None — every in-stock phone is matched. 🎉")
+        out.append("None — every phone is matched. 🎉")
 
     out.append("\n### In-stock models with no image\n")
     if imgs:

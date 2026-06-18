@@ -267,10 +267,14 @@ env overrides the model.
 ### Self-healing triage (triage.py + triage.yml)
 Daily health loop: detect → diagnose → GitHub issue → human decides → fix.
 `triage.py` (no writes) surfaces two signals and pre-diagnoses them as a markdown
-issue body: (1) IN-STOCK phones recorded `specs.status='not_found'` that STILL
-don't match the live GSMArena device DB (re-verified via match_with_aliases; stale
-not_founds that would match now are dropped), each with closest_devices()
-candidates; (2) the `missing_images` view (in-stock models with no image). It's
+issue body: (1) ALL phones (in-stock AND out-of-stock) recorded
+`specs.status='not_found'` that STILL don't match the live GSMArena device DB
+(re-verified via match_with_aliases; stale not_founds that would match now are
+dropped), each tagged in-stock/OOS (in-stock listed first) with closest_devices()
+candidates. Checking OOS too is deliberate: a name LEAK (grade/colour baked into
+the model, e.g. "Realme 12 Pro Plus Good") produces a stray variant that's
+usually OOS, so an in-stock-only check missed exactly the rows that need a
+clean_model fix; (2) the `missing_images` view (in-stock models with no image). It's
 DB-only-safe: if GSMArena blocks the CI IP it notes that and still reports images.
 `triage.yml` (DAILY 06:00 UTC, ~2h after enrich-specs; + dispatch) runs it and
 UPSERTS one issue (label `triage`, stable title) via `gh` (GITHUB_TOKEN, issues:

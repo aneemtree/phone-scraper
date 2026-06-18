@@ -504,9 +504,33 @@ brand warranty), store-specific.
   - xtracover: one Playwright session to scroll the listing; no product pages.
   - controlz: NO usable product API (client calls are analytics; the RSC
     variant data is server-rendered with incomplete `$`-references — storage is
-    missing, units only partially inlined). So it stays DOM-based (the rendered
-    opacity/line-through/price is the source of truth) but runs each product in
-    its own isolated browser via a ThreadPoolExecutor (WORKERS) for speed.
+    missing, units only partially inlined; JSON-LD/variants[] list DRAFT + hidden
+    units that don't match the rendered/buyable set). So it stays DOM-based
+    (Playwright), one isolated browser per product via ThreadPoolExecutor
+    (WORKERS). ControlZ renders ONE of TWO variant UIs per CATEGORY depending on
+    stock, and scrape_product() handles both, clicking ONLY the category (clicking
+    storages/colours destabilises the page — it freezes the price or silently
+    flips the category, which produced phantom mislabeled rows):
+      (A) a per-unit TABLE (Battery / Issues / Storage / Colour / Price) when the
+          category is sold as individual graded units (often Saver Series). It can
+          list MULTIPLE rows for the SAME storage at different prices (colour /
+          battery / issues) — parse_variant_table() reads the rows and the caller
+          keeps the MIN price per storage (the true available-unit list + lowest
+          price). This is the source of truth when present.
+      (B) a storage-button selector + a "Starting From" price (often Premium
+          renewed). "Starting From" is already the lowest colour price for the
+          selected storage; other storages' prices come from each button's signed
+          delta ("128GB- ₹3000", parse_delta()), restricted to the SELECTED
+          button's label-format group ("128GB" vs "128 GB") because ControlZ
+          renders a STALE DUPLICATE storage group for the OTHER category that must
+          be ignored. The selected option is marked by the Tailwind class
+          `outline-primary` (active_option() — it uses CSS `outline`, not border).
+    The h1 carries a suffix ("Apple iPhone 13 - Certified Refurbished | ControlZ")
+    stripped to the bare model before clean_model. db/obs are imported lazily
+    inside scrape()/__main__ so the pure-DOM helpers import without the DB stack.
+    Headless renders the hidden/stale storage buttons as not-visible inconsistently,
+    so visibility is NOT used as the signal — the table + the delta/format-group
+    logic are. Reviews scraped from the "4.7 · 21 REVIEWS" header. Not OOS-wired.
 
 Workflows (GitHub Actions; repo is PUBLIC so Actions minutes are free/unlimited —
 that's why the cadences below are aggressive):

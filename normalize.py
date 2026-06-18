@@ -305,6 +305,15 @@ def parse_name_from_listing(raw: str, href: str = "") -> tuple[str, str | None, 
 def clean_model(title: str) -> str:
     """Strip storage, color, and refurb noise to get a clean model name."""
     t = title
+    # Promotional PREFIX some stores prepend ("November Sale: iPhone 13", "Big
+    # Billion Days Offer: ..."): strip a leading phrase that contains a sale/offer
+    # keyword and ends at a colon. Phone names never contain a colon, so removing
+    # everything up to the first colon here is safe.
+    t = re.sub(r"^\s*[^:]*\b(sale|offer|deal|deals|festive|fest|bonanza|clearance|"
+               r"discount|loot|diwali|navratri|holi|dussehra|christmas|new\s*year|"
+               r"republic|independence|billion)\b[^:]*:\s*", "", t, flags=re.I)
+    t = t.replace(":", " ")  # phones never contain a colon — drop any stray ones
+    t = re.sub(r"\b(sale|offer|deals?|festive|bonanza|clearance)\b", " ", t, flags=re.I)
     # "Nothingphone"/"NothingPhone" written as ONE word (no space) — some stores
     # concatenate brand+product, so the first-word brand logic never split it and
     # it stayed "Nothingphone". Insert the space EARLY (before the paren/number

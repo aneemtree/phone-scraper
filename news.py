@@ -136,12 +136,22 @@ def cluster_articles(articles):
 
 # ── Full-article fetch ───────────────────────────────────────────────────────
 
+# Reject site logos / placeholders / sprites that some outlets expose as their
+# og:image (e.g. mymobileindia's logo) — we'd rather fall through to another
+# candidate or the Pexels/placeholder fallback than show a brand logo as the
+# post image. Matches the filename/path, so it's source-agnostic.
+_JUNK_IMG_RE = re.compile(r"(?:^|[/_-])(logo|logos|watermark|placeholder|sprite|favicon)(?:[/_.-]|$)", re.I)
+
 def _clean_img_url(url, base_url):
-    """Absolutise + sanity-check a candidate image URL. None if empty/svg."""
+    """Absolutise + sanity-check a candidate image URL. None if empty/svg/logo."""
     url = html.unescape((url or "").strip())
     if not url or url.lower().split("?")[0].endswith(".svg"):
         return None
-    return urljoin(base_url, url)
+    abs_url = urljoin(base_url, url)
+    # Drop obvious logos/placeholders (keep the path before the query string).
+    if _JUNK_IMG_RE.search(abs_url.split("?")[0]):
+        return None
+    return abs_url
 
 
 def _jsonld_image(node):

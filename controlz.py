@@ -20,8 +20,9 @@ import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from playwright.sync_api import sync_playwright
 from normalize import clean_model, normalize_storage, normalize_ram, make_variant_key, parse_size_string, normalize_condition, is_phone
-from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
-from obs import init_sentry, log_error
+# db / obs are imported lazily inside scrape()/__main__ so the pure-DOM helpers
+# (scrape_product etc.) can be imported + validated WITHOUT the DB stack
+# (httpx/supabase). A local DOM check: `from controlz import scrape_product`.
 
 SITE = "controlz"
 LISTING_URL = "https://www.controlz.world/store"
@@ -247,6 +248,8 @@ def scrape_one(slug):
 
 def scrape():
     from datetime import datetime, timezone
+    from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock
+    from obs import log_error
     run_started_at = datetime.now(timezone.utc).isoformat()
     mark_site_oos("controlz")
     products = get_product_slugs()
@@ -320,6 +323,7 @@ def scrape():
 
 
 if __name__ == "__main__":
+    from obs import init_sentry, log_error
     init_sentry(SITE)
     try:
         scrape()

@@ -516,6 +516,10 @@ that's why the cadences below are aggressive):
     one scraper. Does NOT run normalize_db.
   - scrape-catalog.yml — DAILY (01:00 UTC) + dispatch. Runs the 16 JSON/RSC
     scrapers (incl samsungcr) with INCLUDE_OOS=1 then normalize_db, purely for SEO.
+  - normalize.yml — DISPATCH-ONLY. Runs JUST normalize_db.py (no scraping) to
+    re-clean names + recompute keys over every row on demand — use after a
+    clean_model/COLORS/alias change so existing rows self-heal without waiting
+    for the next scrape.
 GitHub Actions cron is best-effort and often delayed (can be 1–3h late).
 
 ### Out-of-stock catalog (SEO, monthly)

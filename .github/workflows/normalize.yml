@@ -1,0 +1,29 @@
+name: Normalize DB
+
+# On-demand re-normalization: re-runs clean_model()/make_variant_key() over every
+# phones row (normalize_db Pass 1) + deletes non-phones (Pass 0). Use after a
+# clean_model/COLORS/alias change to self-heal existing rows (incl OOS) without
+# waiting for the next scrape. Deterministic, no AI/API key.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  normalize:
+    runs-on: ubuntu-latest
+    env:
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Normalize (clean names + recompute keys)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python normalize_db.py

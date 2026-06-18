@@ -435,6 +435,11 @@ def clean_model(title: str) -> str:
     # isn't a Motorola phone (runs after Moto->Motorola above so the brand shows).
     if not re.search(r"\bmotorola\b", t, re.I):
         t = re.sub(r"\bfusion\b", " ", t, flags=re.I)
+    # LG G-series with the space dropped: a store wrote "LG G7" as "LG7", which
+    # broke the GSMArena match + split it from the spaced form. Bare "LG<digit>"
+    # is always the G-series (G6/G7/G8); legit LG names keep the space, so this
+    # only fires on the mangled form. "LG7 ThinQ" -> "LG G7 ThinQ".
+    t = re.sub(r"\bLG(\d)", r"LG G\1", t, flags=re.I)
     # Samsung's Galaxy lines are sometimes listed WITHOUT the "Galaxy" word
     # (itradeit: "Samsung S25 Ultra", "Samsung Note 20"). Insert it so the key
     # matches the stores that include it ("Samsung Galaxy S25 Ultra"). Only when

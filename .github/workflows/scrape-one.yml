@@ -28,6 +28,7 @@ on:
           - itradeit
           - gadgetrebirth
           - maplestore
+          - gudfast
 
 permissions:
   contents: read

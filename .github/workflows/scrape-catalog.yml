@@ -91,6 +91,9 @@ jobs:
       - name: Samsung Certified Re-Newed (incl OOS)
         if: ${{ !cancelled() }}
         run: python samsungcr.py
+      - name: GudFast (incl OOS)
+        if: ${{ !cancelled() }}
+        run: python gudfast.py
 
       - name: Normalize (clean names + recompute keys)
         if: ${{ !cancelled() }}

@@ -176,6 +176,13 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python samsungcr.py
 
+      - name: Run GudFast scraper
+        if: ${{ !cancelled() }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python gudfast.py
+
       - name: Normalize (clean names + recompute keys)
         if: ${{ !cancelled() }}
         env:

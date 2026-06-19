@@ -97,7 +97,8 @@ MONTH_DAYS(30)/YEAR_DAYS(365) keep the conversion consistent across scrapers.
     that advertise ONE blanket warranty for all listings). The product owner
     curates these per store (e.g. controlz=540, refit/tetro/ovantica=360,
     cashify/grest/thephonehub/easyphones/budli/maplestore=180, cellbuddy/itradeit
-    =90, gadgetrebirth=15, mobilegoo/oldsold/sahivalue/xtracover=7, samsungcr=365).
+    =90, gadgetrebirth=15, mobilegoo/oldsold/sahivalue/xtracover=7, samsungcr=365,
+    gudfast=30 [1-month blanket warranty]).
     samsungcr also sets warranty_label="Brand Warranty" per offer (1-yr Samsung).
   - NOT captured per-offer yet: maplestore (no warranty stated), sahivalue
     (brand-warranty text only), itradeit/xtracover/controlz (mixed brand/store
@@ -347,7 +348,7 @@ frontend serves them untransformed (Cloudflare's resizer skips vector).
 ### Scrapers & pipeline
 Active scrapers: cashify, controlz, refit, xtracover, ovantica, mobilegoo,
 sahivalue, oldsold, thephonehub, easyphones, tetro, grest, cellbuddy, budli,
-itradeit, gadgetrebirth, maplestore, samsungcr. ControlZ filters non-phones by the actual
+itradeit, gadgetrebirth, maplestore, samsungcr, gudfast. ControlZ filters non-phones by the actual
 product TITLE via is_phone() (a slug-only check missed accessories like power
 banks); thephonehub filters on the CLEAN model, not the slug, because its slugs
 embed marketing words (e.g. "50mp-ois-camera") that collide with is_phone().
@@ -474,6 +475,23 @@ Per-site data source / speed:
     `python3 samsungcr.py --dry` validates with NO DB. OOS-capable (INCLUDE_OOS).
     CAVEAT: Samsung is Akamai-fronted — GitHub Actions IPs may get 403'd (like
     GSMArena); if CI blocks, run locally or via proxy.
+  - gudfast: WooCommerce (gudfast.com), requests-only, all-brands. Listing from
+    the Store API (/wp-json/wc/store/v1/products?category=123 = "Refurbished
+    Smartphone", the master phone category; brand categories like Apple(102) mix
+    in watches, so use 123 + is_phone()). TWO product shapes: VARIABLE — axes are
+    pa_condition (Good/Superb) ± pa_color; storage is NOT an attribute, it's in
+    the TITLE; the full variation matrix is INLINED on the product page as
+    `data-product_variations` (per-variation display_price already in rupees +
+    is_in_stock), so no wc-ajax. SIMPLE — condition + storage parsed from the
+    title; price from the Store API (minor units, ÷100). One row per (storage,
+    condition) at the lowest color price. Storage always from the title (largest
+    GB/TB token); NO RAM axis. Conditions Good/Superb (Cashify vocab), else
+    "Unknown Condition". Native Woo per-product average_rating/review_count stored
+    when review_count>0. Warranty = a blanket "1 Month Warranty" advertised
+    store-wide -> store default_warranty_days (set via SQL, suggested 30); not
+    per-offer. Deep-link: permalink + ?attribute_pa_condition=&attribute_pa_color=.
+    `python3 gudfast.py --dry` validates with NO DB (db imported lazily inside
+    scrape(); add --oos to include sold-out). OOS-capable (INCLUDE_OOS).
 
 ### Condition vocabulary
 Grades from graded stores are Fair/Good/Superb (Cashify/Grest/ThePhoneHub) and
@@ -547,9 +565,9 @@ that's why the cadences below are aggressive):
 GitHub Actions cron is best-effort and often delayed (can be 1–3h late).
 
 ### Out-of-stock catalog (SEO, monthly)
-When the `INCLUDE_OOS=1` env var is set (only scrape-catalog.yml sets it), the 15
+When the `INCLUDE_OOS=1` env var is set (only scrape-catalog.yml sets it), the
 JSON/RSC scrapers (cashify, ovantica, refit, oldsold, mobilegoo, sahivalue,
-thephonehub, easyphones, tetro, grest, cellbuddy, budli, itradeit, gadgetrebirth, maplestore) ALSO save out-of-stock variants: `phones.in_stock=false` + an `out_of_stock` price
+thephonehub, easyphones, tetro, grest, cellbuddy, budli, itradeit, gadgetrebirth, maplestore, gudfast) ALSO save out-of-stock variants: `phones.in_stock=false` + an `out_of_stock` price
 snapshot at the LOWEST selling price (not the strike price), so model pages exist
 for SEO even when nothing is buyable. Default runs are available-only (flag off).
 Shared helpers in db.py: `INCLUDE_OOS` and `better_offer(availability, price, cur)`

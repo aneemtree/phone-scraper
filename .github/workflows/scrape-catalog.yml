@@ -75,12 +75,18 @@ jobs:
         run: python grest.py
       - name: CellBuddy (incl OOS)
         if: ${{ !cancelled() }}
+        env:
+          HTTPS_PROXY: ${{ secrets.SCRAPER_PROXY }}
+          HTTP_PROXY: ${{ secrets.SCRAPER_PROXY }}
         run: python cellbuddy.py
       - name: Budli (incl OOS)
         if: ${{ !cancelled() }}
         run: python budli.py
       - name: iTradeit (incl OOS)
         if: ${{ !cancelled() }}
+        env:
+          HTTPS_PROXY: ${{ secrets.SCRAPER_PROXY }}
+          HTTP_PROXY: ${{ secrets.SCRAPER_PROXY }}
         run: python itradeit.py
       - name: Gadget Rebirth (incl OOS)
         if: ${{ !cancelled() }}

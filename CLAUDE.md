@@ -375,6 +375,12 @@ Per-site data source / speed:
     The collection products.json caps page size (~30) so it paginates until an
     empty page (not <250); prices are rupees; deep-link ?variant=<id>.
   - cellbuddy: WooCommerce (WordPress under the /buddy/ subpath), requests-only.
+    BLOCKED (2026-06): the Store API now returns 403 (Cloudflare WAF) to ANY
+    programmatic request — even from a residential IP with full browser headers —
+    so plain requests can't fetch the catalog. Routed via the SCRAPER_PROXY secret
+    (HTTPS_PROXY on its cellbuddy steps); needs a residential/CF-capable proxy to
+    get back in (a datacenter proxy won't beat the CF challenge). No proxy ->
+    listing yields 0 (now logged, not silent).
     Listing from the Store API (/buddy/wp-json/wc/store/v1/products?category=94 =
     iPhone). NO grade variant axis (variants are only Storage × Color); CellBuddy
     lists each condition as a SEPARATE product, identified by category membership:
@@ -400,6 +406,10 @@ Per-site data source / speed:
     and the pre-owned/used noise pass); "Vivo iQOO …" → "iQOO …" so it shares the
     iQOO brand chip.
   - itradeit: WordPress/WooCommerce (itradeit.in), requests-only, all-brands.
+    BLOCKED on GitHub Actions (2026-06): the Store API 403s from datacenter IPs
+    (like GSMArena/SamsungCR) but works fine from a residential IP — so the code
+    is correct, it just needs the SCRAPER_PROXY secret (HTTPS_PROXY on its
+    itradeit steps) to run in CI. No proxy -> listing yields 0 (now logged).
     Two product categories carry the CONDITION (there is no grade/condition
     variant axis — axes are only pa_color × pa_storage, so condition = category
     membership like CellBuddy): open-box-phones (id 438) → "Open Box";

@@ -139,6 +139,11 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # CellBuddy (Cloudflare WAF) + iTradeit (blocks Actions datacenter IPs)
+          # need a residential/CF-capable proxy. requests auto-honors these; an
+          # unset SCRAPER_PROXY secret = empty = no proxy (no-op).
+          HTTPS_PROXY: ${{ secrets.SCRAPER_PROXY }}
+          HTTP_PROXY: ${{ secrets.SCRAPER_PROXY }}
         run: python cellbuddy.py
 
       - name: Run Budli scraper
@@ -153,6 +158,8 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          HTTPS_PROXY: ${{ secrets.SCRAPER_PROXY }}
+          HTTP_PROXY: ${{ secrets.SCRAPER_PROXY }}
         run: python itradeit.py
 
       - name: Run Gadget Rebirth scraper

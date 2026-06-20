@@ -94,6 +94,9 @@ def fetch_listing():
                f"?category={CATEGORY_ID}&per_page=100&page={page}")
         r = requests.get(url, headers=HEADERS, timeout=30)
         if r.status_code != 200:
+            # 403 = Cloudflare WAF block (needs SCRAPER_PROXY); log so it's not a
+            # silent 0 in triage.
+            print(f"  cellbuddy listing HTTP {r.status_code} (blocked? set SCRAPER_PROXY)")
             break
         batch = r.json()
         if not batch:

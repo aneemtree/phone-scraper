@@ -53,6 +53,14 @@ COLORS = [
     # Vivo V30 Pro "Andaman Blue"->"Andaman". (NOT "Fusion" — that's a real
     # Motorola model line.)
     "matte", "flashy", "andaman",
+    # Triage 2026-06-19 leaks: colour/finish qualifiers stores append to the
+    # model name, blocking the GSMArena match + cross-store merge. Multi-word
+    # first. DELIBERATELY excludes words that are real model lines: NOT "power"
+    # (Moto G Power), NOT bare "aqua" (Intex Aqua / Aqua-brand phones).
+    "soothing sea", "viva magenta", "aqua flow",
+    "dusk", "amber", "ocean", "breeze", "rock", "olive", "glazed", "shimmer",
+    "indigo", "morning", "shadow", "bahama", "marble", "silky", "noble", "just",
+    "norway", "nebula", "nerbula", "eternal", "ethernal",
 ]
 
 # Roman numerals (II-XII) that title-casing would lower-case (e.g. Sony "Xperia 1
@@ -313,6 +321,8 @@ def clean_model(title: str) -> str:
                r"discount|loot|diwali|navratri|holi|dussehra|christmas|new\s*year|"
                r"republic|independence|billion)\b[^:]*:\s*", "", t, flags=re.I)
     t = t.replace(":", " ")  # phones never contain a colon — drop any stray ones
+    # Brand typo seen in store titles: "Samung Galaxy S23" -> Samsung.
+    t = re.sub(r"\bsamung\b", "Samsung", t, flags=re.I)
     t = re.sub(r"\b(sale|offer|deals?|festive|bonanza|clearance)\b", " ", t, flags=re.I)
     # Month / festival names only appear in promo titles (never in a model name),
     # so strip them too — covers promos written WITHOUT a colon ("November Sale
@@ -332,6 +342,8 @@ def clean_model(title: str) -> str:
     # in parens, which the strip would otherwise delete (collapsing Phone 1/2/3 and
     # SE 2020/2022). For iPhone SE, also map generation ordinals to the year, since
     # stores mix "SE 2022" / "SE 3rd Gen" / "SE (3rd generation)" for the same phone.
+    # "iPhone 5SE" was the pre-launch name for the original iPhone SE (2016).
+    t = re.sub(r"\biphone\s*5\s*se\b", "iPhone SE 2016", t, flags=re.I)
     if re.search(r"\biphone\s+se\b", t, re.I):
         t = re.sub(r"\b1st\s+gen\w*", "2016", t, flags=re.I)
         t = re.sub(r"\b2nd\s+gen\w*", "2020", t, flags=re.I)
@@ -345,6 +357,8 @@ def clean_model(title: str) -> str:
     # stays distinct from the non-plus model. The (?!\d) guard avoids touching
     # RAM+storage notation like "8+256".
     t = re.sub(r"\+(?!\d)", " Plus", t)
+    # "plus" stuck to the model number with no space ("iPhone 7plus") -> "7 Plus".
+    t = re.sub(r"(?<=\d)\s*plus\b", " Plus", t, flags=re.I)
     # ControlZ condition grades ("Premium Renewed", "Saver Series") can lead or
     # trail the title/slug. Strip the grade words so they never leak into the
     # model name. The old "saver series.*$" rule deleted everything after it —

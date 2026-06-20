@@ -64,4 +64,8 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # Proxy for the blocked stores (cellbuddy CF WAF / itradeit Actions-IP
+          # block). Harmless for other scrapers; empty SCRAPER_PROXY = no proxy.
+          HTTPS_PROXY: ${{ secrets.SCRAPER_PROXY }}
+          HTTP_PROXY: ${{ secrets.SCRAPER_PROXY }}
         run: python ${{ inputs.scraper }}.py

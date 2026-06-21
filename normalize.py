@@ -61,6 +61,7 @@ COLORS = [
     "dusk", "amber", "ocean", "breeze", "rock", "olive", "glazed", "shimmer",
     "indigo", "morning", "shadow", "bahama", "marble", "silky", "noble", "just",
     "norway", "nebula", "nerbula", "eternal", "ethernal",
+    "mineral",
 ]
 
 # Roman numerals (II-XII) that title-casing would lower-case (e.g. Sony "Xperia 1
@@ -219,6 +220,7 @@ BRAND_CASE = {
     "google": "Google", "nothing": "Nothing", "asus": "ASUS", "lg": "LG",
     "huawei": "Huawei", "honor": "Honor", "sony": "Sony", "infinix": "Infinix",
     "tecno": "Tecno", "lava": "Lava", "micromax": "Micromax",
+    "htc": "HTC", "lenovo": "Lenovo", "meizu": "Meizu",
     "iphone": "iPhone", "ipad": "iPad",
 }
 
@@ -396,6 +398,9 @@ def clean_model(title: str) -> str:
     # brand that splits the Apple filter into "Apple" + "iPhone".
     t = re.sub(r"\biphone\b", "iPhone", t, flags=re.I)
     t = re.sub(r"\bipad\b", "iPad", t, flags=re.I)
+    # "XL" suffix gets lowercased by some stores ("Pixel 2 Xl"); uppercase it so
+    # the GSMArena match works (e.g. "Google Pixel 2 XL").
+    t = re.sub(r"\bxl\b", "XL", t, flags=re.I)
 
     # Canonicalize brand-word casing EARLY too. An all-caps brand like "GOOGLE"
     # or sub-brand like "GALAXY"/"REDMI" would otherwise be deleted by the

@@ -219,6 +219,19 @@ combined card), and gsmarena.py + beebom.py try the model name AND its aliases w
 matching the external source (load_aliases()/match_with_aliases). Keyed by the exact
 model string, case-insensitive. Schema in specs_schema.sql.
 
+### Specs + images: Beebom PRIMARY, GSMArena BACKFILL (IMPORTANT)
+Beebom (beebom.py) is now the PRIMARY source for BOTH the card image AND the spec
+sheet — no throttling, India catalog/names. Per matched MODEL (one GET) it writes
+image_url (image_source='beebom') + the `specs` JSONB in Beebom's NATIVE grouped
+form: `{"_source":"beebom","_groups":[{title,rows:[[label,value],...]}], "net5g"?}`
+(net5g lifted from Network->Technology "5G,…" so the web 5G filter works). The web
+renders `_groups` directly (lib/specs.js). GSMArena (gsmarena.py) is now BACKFILL
+ONLY: its `_targets()` skips any model that already has a `specs` row, so Beebom-
+matched models are left alone and only Beebom-missed (usually older) models get
+GSMArena's flat specs + ~160px fallback image. beebom.py already runs before
+gsmarena in the workflows. parse_specs() in beebom.py parses by STRUCTURE (h3
+category split + per-li two-span), not the hashed class names.
+
 ### Image hosting (Cloudflare R2)
 Images are ONE canonical image per MODEL. The offers view serves
 `coalesce(specs.image_url, specs.image_fallback)`: PRIMARY = Beebom (beebom.py;

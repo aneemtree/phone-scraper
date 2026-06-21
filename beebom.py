@@ -1,9 +1,16 @@
 """
-Beebom image enrichment (gadgets.beebom.com).
+Beebom enrichment (gadgets.beebom.com) — PRIMARY image + specs.
 
-Primary card image (specs.image_url): a clean front-back render per phone at
-~640-1000px, far larger than GSMArena's 160px. Specs stay on GSMArena; this only
-writes image_url + image_source='beebom'.
+Per matched MODEL (one GET) we write BOTH:
+  - image_url (image_source='beebom'): a clean front-back render at ~640-1000px.
+  - specs (JSONB): Beebom's full, India-specific spec sheet in its NATIVE grouped
+    form {"_source":"beebom","_groups":[{title,rows:[[label,value]]}], "net5g"?}.
+    The web renders the groups directly; net5g (Network->Technology "5G,…") is
+    lifted to the top level so the 5G filter works.
+Beebom is the PRIMARY spec source (no throttling, India catalog/names). GSMArena
+(gsmarena.py) now only BACKFILLS: its _targets skips any model that already has a
+`specs` row, so models Beebom matched are left alone and only Beebom-missed (older)
+models get GSMArena specs. beebom.py already runs before gsmarena in the workflows.
 
 Matching uses Beebom's OWN full catalog sitemap (all_mobiles.xml, ~2300 slugs),
 fetched once and cached. Each of our models is matched LOCALLY to a Beebom slug via
@@ -140,6 +147,70 @@ def fetch_image(slug):
     return img
 
 
+def fetch_page(slug):
+    """One GET per matched product — returns (html, og_image|None) so a single
+    fetch yields both the image and the spec sheet."""
+    r = _get(PROD + slug)
+    if not r or r.status_code != 200:
+        return None, None
+    html = r.text
+    img = None
+    m = re.search(r'property=["\']og:image["\']\s+content=["\']([^"\']+)', html)
+    if m and "beebom.com" in m.group(1):
+        tail = m.group(1).split("beebom.com/", 1)[-1].lower()
+        if "http" not in tail and "geni.us" not in tail:
+            img = m.group(1)
+    return html, img
+
+
+# Beebom renders its full spec sheet as React divs (hashed class names), grouped
+# by category (<h3>General/Display/Body/Processor/Main Camera/Operating System/
+# Selfie Camera/Battery/Network</h3>) with <li><span>Label</span><span>Value</span>
+# rows. We parse by STRUCTURE (h3 split + per-li two-span), not class names. The
+# grouped form is stored as-is in specs._groups (the web renders it directly);
+# net5g (the 5G-filter signal) is lifted to the top level from Network→Technology.
+def _txt(s):
+    import html as _h
+    return re.sub(r"\s+", " ", _h.unescape(re.sub(r"<[^>]+>", " ", s))).strip()
+
+
+def parse_specs(page):
+    """Beebom product HTML -> (specs_dict, ok). specs_dict =
+    {"_source":"beebom", "_groups":[{title, rows:[[label,value],...]}], "net5g"?}."""
+    if not page:
+        return None, False
+    s = page.find('id="general"')
+    e = page.find('id="go-to-store"')
+    region = page[s:e] if s >= 0 and e > s else page
+    # Split on category headings; parts = [pre, title1, body1, title2, body2, ...]
+    parts = re.split(r"<h3[^>]*>(.*?)</h3>", region, flags=re.S)
+    groups, net5g = [], None
+    for i in range(1, len(parts) - 1, 2):
+        title = _txt(parts[i])
+        if not title or len(title) > 40:
+            continue
+        rows = []
+        for lab, val in re.findall(
+            r"<li[^>]*>\s*<span[^>]*>([^<]+)</span>\s*<span[^>]*>(.*?)</span>\s*</li>",
+            parts[i + 1], re.S):
+            L, V = _txt(lab), _txt(val)
+            if L and V and V != "-":
+                rows.append([L, V])
+        if rows:
+            groups.append({"title": title, "rows": rows})
+        if re.search(r"network|connectivity", title, re.I):
+            for L, V in rows:
+                if re.search(r"technolog|network|speed|band", L, re.I) and "5g" in V.lower():
+                    net5g = V
+                    break
+    if not groups:
+        return None, False
+    out = {"_source": "beebom", "_groups": groups}
+    if net5g:
+        out["net5g"] = net5g
+    return out, True
+
+
 def _targets():
     phones = _fetch_all("phones", "model")
     specs = _fetch_all("specs", "model,image_url,image_source")
@@ -166,21 +237,34 @@ def enrich(limit=None):
     models = _targets()
     models = models[:limit] if limit else models
     print(f"{len(models)} models missing a Beebom image.\n")
-    got = miss = 0
+    got = miss = specs_n = 0
     for model in models:
         slug = match_slug(model, idx, aliases)
-        img = fetch_image(slug) if slug else None
-        if not img:
+        page, img = fetch_page(slug) if slug else (None, None)
+        if not page:
             miss += 1
             upsert_specs(model, {"image_source": "beebom_miss"})  # don't retry next run
             print(f"  MISS   {model}")
             continue
-        hosted = host_image(img, f"img/{make_variant_key(model, None)}.jpg") or img
-        upsert_specs(model, {"image_url": hosted, "image_source": "beebom"})
+        fields = {}
+        if img:
+            hosted = host_image(img, f"img/{make_variant_key(model, None)}.jpg") or img
+            fields["image_url"] = hosted
+            fields["image_source"] = "beebom"
+        specs, ok = parse_specs(page)
+        if ok:
+            fields["specs"] = specs   # primary spec source; GSMArena backfills the rest
+            specs_n += 1
+        if not fields:
+            miss += 1
+            upsert_specs(model, {"image_source": "beebom_miss"})
+            print(f"  MISS   {model} (matched {slug} but no image/specs)")
+            continue
+        upsert_specs(model, fields)
         got += 1
-        print(f"  ok     {model:32} -> {slug}")
+        print(f"  ok     {model:32} -> {slug}  [{'img' if img else '---'}|{'specs' if ok else '-----'}]")
         time.sleep(DELAY + random.uniform(0, DELAY))
-    print(f"\nDone. images={got} misses={miss}")
+    print(f"\nDone. matched={got} (specs={specs_n}) misses={miss}")
 
 
 def dry_run(limit=None):
@@ -195,13 +279,23 @@ def dry_run(limit=None):
         slug = match_slug(model, idx, aliases)
         if slug:
             got += 1
-            print(f"  ok    {model:32} -> {slug}")
+            # When a small --limit is given, fetch + parse to VALIDATE spec
+            # extraction (group/row counts + net5g), no DB writes.
+            if limit:
+                page, img = fetch_page(slug)
+                specs, ok = parse_specs(page)
+                ng = len(specs["_groups"]) if ok else 0
+                nr = sum(len(g["rows"]) for g in specs["_groups"]) if ok else 0
+                print(f"  ok    {model:30} -> {slug:34} img={'y' if img else 'n'} "
+                      f"groups={ng} rows={nr} 5g={'y' if ok and specs.get('net5g') else 'n'}")
+            else:
+                print(f"  ok    {model:32} -> {slug}")
         else:
             miss += 1
             print(f"  MISS  {model:32} -> closest: {closest(model, slugs)}")
         time.sleep(0.05)
     total = got + miss
-    print(f"\nWOULD images={got} misses={miss}" +
+    print(f"\nWOULD match={got} misses={miss}" +
           (f" (match={got/total*100:.0f}%)" if total else ""))
 
 

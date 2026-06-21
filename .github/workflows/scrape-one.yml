@@ -29,6 +29,8 @@ on:
           - gadgetrebirth
           - maplestore
           - gudfast
+          - beebom
+          - gsmarena
 
 permissions:
   contents: read

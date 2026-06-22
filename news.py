@@ -214,18 +214,40 @@ def extract_lead_image(page_html, base_url):
 
 def fetch_article(url):
     """Download the page; return (main_text, lead_image_url). text is None when
-    extraction yields too little to write from; image may be None."""
+    extraction yields too little to write from; image may be None.
+
+    Two download paths so a source that blocks the bare requests call still gets
+    extracted: (1) requests with full browser-like headers (NO raise_for_status —
+    a consent/4xx page sometimes still carries the article body, so we try to
+    extract anyway); (2) trafilatura.fetch_url(), whose own downloader clears
+    many sites the naive request can't. Only when BOTH yield too little do we
+    skip (the pipeline never writes from alert snippets)."""
     import trafilatura
+    headers = {
+        "User-Agent": UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-IN,en;q=0.9",
+        "Referer": "https://www.google.com/",
+    }
+    htmls = []
     try:
-        r = requests.get(url, timeout=25, headers={"User-Agent": UA})
-        r.raise_for_status()
-        text = (trafilatura.extract(r.text, include_comments=False,
-                                    include_tables=False) or "").strip()
-        if len(text) < MIN_ARTICLE_CHARS:
-            return None, None
-        return text, extract_lead_image(r.text, r.url)
+        r = requests.get(url, timeout=25, headers=headers)
+        if r.text:
+            htmls.append((r.text, r.url))
     except Exception:
-        return None, None
+        pass
+    try:
+        dl = trafilatura.fetch_url(url)        # trafilatura's own downloader
+        if dl:
+            htmls.append((dl, url))
+    except Exception:
+        pass
+    for html, base in htmls:
+        text = (trafilatura.extract(html, include_comments=False,
+                                    include_tables=False) or "").strip()
+        if len(text) >= MIN_ARTICLE_CHARS:
+            return text, extract_lead_image(html, base)
+    return None, None
 
 
 # ── Relevance (skip non-phone stories) ───────────────────────────────────────

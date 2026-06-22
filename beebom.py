@@ -213,16 +213,28 @@ def parse_specs(page):
 
 def _targets():
     phones = _fetch_all("phones", "model")
-    specs = _fetch_all("specs", "model,image_url,image_source")
-    # Self-limiting (like gsmarena's not_found): skip models that already have a
-    # Beebom image AND those recorded as a miss, so running after every scrape
-    # only fetches NEW models — not re-hammering hundreds of unmatched ones.
-    have = {(r.get("model") or "").lower() for r in specs
-            if r.get("image_source") in ("beebom", "beebom_miss")}
+    specs = _fetch_all("specs", "model,image_source,specs")
+    # Self-limiting: a model is DONE once Beebom has written BOTH image + specs
+    # (specs._source == 'beebom'); a 'beebom_miss' (no Beebom match) is skipped
+    # permanently. Everything else is a target — including models that got a
+    # Beebom IMAGE in an earlier image-only run but still lack Beebom SPECS (they
+    # get re-fetched once to add the spec sheet, then become done). So each run
+    # only fetches models still missing Beebom specs, never re-hammering matches.
+    done, miss = set(), set()
+    for r in specs:
+        m = (r.get("model") or "").lower()
+        if not m:
+            continue
+        sp = r.get("specs")
+        if isinstance(sp, dict) and sp.get("_source") == "beebom":
+            done.add(m)
+        if r.get("image_source") == "beebom_miss":
+            miss.add(m)
+    skip = done | miss
     todo, seen = [], set()
     for p in phones:
         m = p.get("model") or ""
-        if not m or m.lower() in seen or m.lower() in have:
+        if not m or m.lower() in seen or m.lower() in skip:
             continue
         seen.add(m.lower())
         todo.append(m)
@@ -236,7 +248,7 @@ def enrich(limit=None):
     print(f"  {len(idx)} Beebom slugs indexed.")
     models = _targets()
     models = models[:limit] if limit else models
-    print(f"{len(models)} models missing a Beebom image.\n")
+    print(f"{len(models)} models missing Beebom specs (incl. image-only models).\n")
     got = miss = specs_n = 0
     for model in models:
         slug = match_slug(model, idx, aliases)
@@ -273,7 +285,7 @@ def dry_run(limit=None):
     print(f"  {len(idx)} Beebom slugs indexed.")
     models = _targets()
     models = models[:limit] if limit else models
-    print(f"{len(models)} models missing a Beebom image.\n")
+    print(f"{len(models)} models missing Beebom specs (incl. image-only models).\n")
     got = miss = 0
     for model in sorted(models):
         slug = match_slug(model, idx, aliases)

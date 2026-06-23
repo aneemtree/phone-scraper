@@ -214,18 +214,40 @@ def extract_lead_image(page_html, base_url):
 
 def fetch_article(url):
     """Download the page; return (main_text, lead_image_url). text is None when
-    extraction yields too little to write from; image may be None."""
+    extraction yields too little to write from; image may be None.
+
+    Two download paths so a source that blocks the bare requests call still gets
+    extracted: (1) requests with full browser-like headers (NO raise_for_status —
+    a consent/4xx page sometimes still carries the article body, so we try to
+    extract anyway); (2) trafilatura.fetch_url(), whose own downloader clears
+    many sites the naive request can't. Only when BOTH yield too little do we
+    skip (the pipeline never writes from alert snippets)."""
     import trafilatura
+    headers = {
+        "User-Agent": UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-IN,en;q=0.9",
+        "Referer": "https://www.google.com/",
+    }
+    htmls = []
     try:
-        r = requests.get(url, timeout=25, headers={"User-Agent": UA})
-        r.raise_for_status()
-        text = (trafilatura.extract(r.text, include_comments=False,
-                                    include_tables=False) or "").strip()
-        if len(text) < MIN_ARTICLE_CHARS:
-            return None, None
-        return text, extract_lead_image(r.text, r.url)
+        r = requests.get(url, timeout=25, headers=headers)
+        if r.text:
+            htmls.append((r.text, r.url))
     except Exception:
-        return None, None
+        pass
+    try:
+        dl = trafilatura.fetch_url(url)        # trafilatura's own downloader
+        if dl:
+            htmls.append((dl, url))
+    except Exception:
+        pass
+    for html, base in htmls:
+        text = (trafilatura.extract(html, include_comments=False,
+                                    include_tables=False) or "").strip()
+        if len(text) >= MIN_ARTICLE_CHARS:
+            return text, extract_lead_image(html, base)
+    return None, None
 
 
 # ── Relevance (skip non-phone stories) ───────────────────────────────────────
@@ -308,16 +330,22 @@ SYSTEM_PROMPT = (
     "- image_query: a 2-4 word stock photo search likely to match generic "
     "photos (e.g. 'samsung smartphone closeup', 'smartphone repair'), never "
     "model numbers that stock sites won't have.\n"
-    "- DUPLICATES (important): you are given the titles+slugs of recently "
-    "published posts. Set duplicate_of to a post's slug when your story covers "
-    "the SAME phone AND the SAME event as that post, even if the wording, angle, "
-    "or outlet is completely different. Examples that ARE duplicates: a launch "
-    "described as 'X launches in India' vs 'X's huge battery arrives' (same "
-    "launch); the same price drop reported twice. NOT duplicates (keep separate, "
-    "duplicate_of null): different events about the same phone -- a launch vs a "
-    "price drop vs a new feature vs a 'X vs Y' comparison. When in doubt and it "
-    "is clearly the same announcement of the same device, mark it a duplicate. "
-    "Leave the other fields minimal when duplicate_of is set."
+    "- DUPLICATES (CRITICAL): each recently published post is listed below with "
+    "its title AND a short gist of its content. Compare your NEW story's SUBSTANCE "
+    "(the phone + what actually happened) against those gists, NOT just the "
+    "titles. Two reworded headlines about the same event share almost no title "
+    "words but the same gist. Set duplicate_of to that post's slug when your story "
+    "is the SAME phone AND the SAME news beat as an existing post, even if the "
+    "wording, angle, framing, numbers, or outlet differ. Examples that ARE "
+    "duplicates (mark duplicate_of): 'Foldable iPhone Could Cost $2,000 in a Tech "
+    "Downturn' vs 'iPhone Fold Could Hit $2,000 During a Recession' (same rumor); "
+    "'Pixel gets Manual Call Screening' vs 'Pixel can now Block Unknown Callers' "
+    "(same feature rollout); a launch described two ways; the same price drop "
+    "reported twice. NOT duplicates (duplicate_of null): genuinely DIFFERENT "
+    "events about the same phone -- a launch vs a later price drop vs a separate "
+    "feature vs a 'X vs Y' comparison. Bias toward marking a duplicate when the "
+    "phone and the core news match. Leave the other fields minimal when "
+    "duplicate_of is set."
 )
 
 
@@ -328,12 +356,25 @@ def scrub_dashes(text):
     return text
 
 
+def _post_gist(p):
+    """A short content gist for a recent post, so the dedup check compares STORY
+    SUBSTANCE, not just titles (two reworded headlines about the same event share
+    little title text but the same gist)."""
+    g = p.get("gist")
+    if not g:
+        g = re.sub(r"<[^>]+>", " ", p.get("body_html") or "")
+        g = re.sub(r"\s+", " ", g).strip()
+    return g[:200]
+
+
 def write_post(cluster, sources_text, recent_posts):
     """One Claude call: returns dict per WRITER_SCHEMA."""
     import anthropic
     client = anthropic.Anthropic()
 
-    recent = "\n".join(f"- {p['title']} (slug: {p['slug']})" for p in recent_posts) or "(none)"
+    recent = "\n".join(
+        f"- {p['title']} (slug: {p['slug']})\n  gist: {_post_gist(p)}"
+        for p in recent_posts) or "(none)"
     src_blocks = []
     for art, text in sources_text:
         src_blocks.append(
@@ -476,7 +517,7 @@ def run(dry=False):
     # Recent posts (for the duplicate check inside the writer prompt).
     since = (datetime.now(timezone.utc) - timedelta(days=RECENT_POST_DAYS)).isoformat()
     recent_posts = _exec(lambda: supabase.table("blog_posts")
-                         .select("id, slug, title, sources, image_url")
+                         .select("id, slug, title, sources, image_url, body_html")
                          .gte("created_at", since)
                          .order("created_at", desc=True).limit(60).execute()).data
 
@@ -565,7 +606,8 @@ def run(dry=False):
             }).execute()).data[0]
             record_articles(supabase, _exec, cluster, post["id"])
             recent_posts.insert(0, {"id": post["id"], "slug": slug,
-                                    "title": result["title"], "sources": post["sources"]})
+                                    "title": result["title"], "sources": post["sources"],
+                                    "gist": " ".join(paragraphs)[:200]})
             print(f"  PUBLISHED /phone-news/{slug}  ({len(cluster)} source(s))")
         except Exception as e:
             log_error(e, stage="cluster", cluster=titles[:120])

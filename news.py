@@ -330,16 +330,22 @@ SYSTEM_PROMPT = (
     "- image_query: a 2-4 word stock photo search likely to match generic "
     "photos (e.g. 'samsung smartphone closeup', 'smartphone repair'), never "
     "model numbers that stock sites won't have.\n"
-    "- DUPLICATES (important): you are given the titles+slugs of recently "
-    "published posts. Set duplicate_of to a post's slug when your story covers "
-    "the SAME phone AND the SAME event as that post, even if the wording, angle, "
-    "or outlet is completely different. Examples that ARE duplicates: a launch "
-    "described as 'X launches in India' vs 'X's huge battery arrives' (same "
-    "launch); the same price drop reported twice. NOT duplicates (keep separate, "
-    "duplicate_of null): different events about the same phone -- a launch vs a "
-    "price drop vs a new feature vs a 'X vs Y' comparison. When in doubt and it "
-    "is clearly the same announcement of the same device, mark it a duplicate. "
-    "Leave the other fields minimal when duplicate_of is set."
+    "- DUPLICATES (CRITICAL): each recently published post is listed below with "
+    "its title AND a short gist of its content. Compare your NEW story's SUBSTANCE "
+    "(the phone + what actually happened) against those gists, NOT just the "
+    "titles. Two reworded headlines about the same event share almost no title "
+    "words but the same gist. Set duplicate_of to that post's slug when your story "
+    "is the SAME phone AND the SAME news beat as an existing post, even if the "
+    "wording, angle, framing, numbers, or outlet differ. Examples that ARE "
+    "duplicates (mark duplicate_of): 'Foldable iPhone Could Cost $2,000 in a Tech "
+    "Downturn' vs 'iPhone Fold Could Hit $2,000 During a Recession' (same rumor); "
+    "'Pixel gets Manual Call Screening' vs 'Pixel can now Block Unknown Callers' "
+    "(same feature rollout); a launch described two ways; the same price drop "
+    "reported twice. NOT duplicates (duplicate_of null): genuinely DIFFERENT "
+    "events about the same phone -- a launch vs a later price drop vs a separate "
+    "feature vs a 'X vs Y' comparison. Bias toward marking a duplicate when the "
+    "phone and the core news match. Leave the other fields minimal when "
+    "duplicate_of is set."
 )
 
 
@@ -350,12 +356,25 @@ def scrub_dashes(text):
     return text
 
 
+def _post_gist(p):
+    """A short content gist for a recent post, so the dedup check compares STORY
+    SUBSTANCE, not just titles (two reworded headlines about the same event share
+    little title text but the same gist)."""
+    g = p.get("gist")
+    if not g:
+        g = re.sub(r"<[^>]+>", " ", p.get("body_html") or "")
+        g = re.sub(r"\s+", " ", g).strip()
+    return g[:200]
+
+
 def write_post(cluster, sources_text, recent_posts):
     """One Claude call: returns dict per WRITER_SCHEMA."""
     import anthropic
     client = anthropic.Anthropic()
 
-    recent = "\n".join(f"- {p['title']} (slug: {p['slug']})" for p in recent_posts) or "(none)"
+    recent = "\n".join(
+        f"- {p['title']} (slug: {p['slug']})\n  gist: {_post_gist(p)}"
+        for p in recent_posts) or "(none)"
     src_blocks = []
     for art, text in sources_text:
         src_blocks.append(
@@ -498,7 +517,7 @@ def run(dry=False):
     # Recent posts (for the duplicate check inside the writer prompt).
     since = (datetime.now(timezone.utc) - timedelta(days=RECENT_POST_DAYS)).isoformat()
     recent_posts = _exec(lambda: supabase.table("blog_posts")
-                         .select("id, slug, title, sources, image_url")
+                         .select("id, slug, title, sources, image_url, body_html")
                          .gte("created_at", since)
                          .order("created_at", desc=True).limit(60).execute()).data
 
@@ -587,7 +606,8 @@ def run(dry=False):
             }).execute()).data[0]
             record_articles(supabase, _exec, cluster, post["id"])
             recent_posts.insert(0, {"id": post["id"], "slug": slug,
-                                    "title": result["title"], "sources": post["sources"]})
+                                    "title": result["title"], "sources": post["sources"],
+                                    "gist": " ".join(paragraphs)[:200]})
             print(f"  PUBLISHED /phone-news/{slug}  ({len(cluster)} source(s))")
         except Exception as e:
             log_error(e, stage="cluster", cluster=titles[:120])

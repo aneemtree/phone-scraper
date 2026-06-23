@@ -667,10 +667,15 @@ whole scheduled queue deprioritized, which was also delaying scrape.yml).
     insert blog_posts + record news_articles with post_id.
   - WRITER: claude-haiku-4-5 via the anthropic SDK, structured JSON output
     (output_config json_schema): {phone_related, duplicate_of, title,
-    paragraphs, image_query}. The prompt carries the last 14 days of post
-    titles+slugs: if the story RESURFACES from another outlet in a later run,
-    the model returns duplicate_of=<slug> and the new outlets are attached to
-    that post's `sources` instead of publishing a second post. This single
+    paragraphs, image_query}. The prompt carries the last 14 days of posts as
+    title + a CONTENT GIST (first ~200 chars, stripped from body_html; same-run
+    posts add a gist from their paragraphs) — comparing story SUBSTANCE not just
+    titles, since two reworded headlines about the same event share almost no
+    title words but the same gist (this was letting near-dupes through, e.g.
+    "Foldable iPhone $2,000 downturn" vs "iPhone Fold $2,000 recession"). If the
+    story RESURFACES from another outlet, the model returns duplicate_of=<slug>
+    (biased toward marking a dup when phone + news beat match) and the new outlets
+    are attached to that post's `sources` instead of publishing a second post. This single
     writer call is the ONLY LLM call per cluster (one Haiku call) — dedup is
     NOT a separate model call (a redundant claude-sonnet-4-6 dedup pre-check was
     removed; the writer reads the full articles so its duplicate_of is the dedup,

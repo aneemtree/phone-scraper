@@ -38,7 +38,7 @@ import time
 import json
 import sys
 import requests
-from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone
+from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone, normalize_ram
 from obs import init_sentry, log_error
 # db is imported lazily inside scrape() so build_offers()/--dry stay import-free
 # (no httpx/supabase needed just to validate parsing).
@@ -64,6 +64,17 @@ def storage_from_title(name):
         if best is None or gb > best[0]:
             best = (gb, f"{num}{unit.upper()}")
     return normalize_storage(best[1]) if best else None
+
+
+def ram_from_title(name, permalink=""):
+    """GudFast bakes the RAM into the title/slug ("… 256 GB, 8 GB RAM …" /
+    "…-256-gb-8-gb-ram-refurbished"), so capture it explicitly (the storage is
+    the largest GB token; RAM is the one labelled 'RAM'). Try the title first,
+    then the permalink slug (dashes -> spaces). Returns None when no RAM is
+    labelled — never guesses from the storage token (normalize_ram requires the
+    word 'RAM')."""
+    return (normalize_ram(html.unescape(name or ""))
+            or normalize_ram((permalink or "").replace("-", " ")))
 
 
 def build_model(name):
@@ -201,6 +212,7 @@ def build_offers(products, include_oos=False):
 
         vkey = make_variant_key(model, storage, None)
         permalink = prod.get("permalink") or f"{BASE_URL}/product/{prod.get('slug','')}/"
+        ram = ram_from_title(raw_name, permalink)
         images = prod.get("images") or []
         prod_img = images[0].get("src") if images else None
         # Native Woo per-product reviews (stored only when there's at least one).
@@ -228,7 +240,7 @@ def build_offers(products, include_oos=False):
             url = f"{permalink}?{'&'.join(params)}" if params else permalink
 
             best[bkey] = {
-                "model": model, "storage": storage, "variant_key": vkey,
+                "model": model, "storage": storage, "variant_key": vkey, "ram": ram,
                 "condition": e["condition"], "price": e["price"],
                 "availability": e["availability"], "url": url, "image_url": prod_img,
                 "rating": rating, "review_count": review_count if review_count > 0 else None,
@@ -260,7 +272,7 @@ def scrape():
 
         pid = save_phone(
             SITE, o["name"], o["url"], final_image,
-            o["model"], o["storage"], None, o["variant_key"],
+            o["model"], o["storage"], o.get("ram"), o["variant_key"],
             in_stock=(o["name"] in in_stock_names),
         )
         save_price(

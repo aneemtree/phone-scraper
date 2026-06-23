@@ -29,7 +29,7 @@ Run with: python3 budli.py
 import re
 import time
 import requests
-from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone
+from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone, normalize_ram
 from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer, months_to_days, YEAR_DAYS
 from obs import init_sentry, log_error
 
@@ -86,6 +86,16 @@ def storage_opt_pos(prod):
         if "stor" in n or "size" in n or "capacity" in n:
             return o.get("position")
     return None
+
+
+def ram_from_title(title):
+    """RAM from the title ONLY when a single, unambiguous value is labelled (e.g.
+    '128GB 6GB RAM' -> 6GB). A SLASH RANGE ('8GB/12GB RAM') means the listing
+    didn't pin a RAM, so return None (don't guess one) — Budli is title-parsed
+    and many titles carry such ranges."""
+    if re.search(r"\d+\s*GB\s*/\s*\d+\s*GB\s*RAM", title or "", re.I):
+        return None
+    return normalize_ram(title or "")
 
 
 def storage_from_title(title):
@@ -157,6 +167,7 @@ def scrape():
         img_url = get_image(prod)
         warranty_days, warranty_label = warranty_from_body(prod.get("body_html", ""))
         title_storage = storage_from_title(title)
+        title_ram = ram_from_title(title)
         spos = storage_opt_pos(prod)
 
         variants = prod.get("variants", [])
@@ -184,7 +195,7 @@ def scrape():
             bkey = (variant_key, condition)
             if better_offer(availability, price, best.get(bkey)):
                 best[bkey] = {
-                    "model": model, "storage": storage, "ram": None,
+                    "model": model, "storage": storage, "ram": title_ram,
                     "variant_key": variant_key, "condition": condition,
                     "price": price, "availability": availability,
                     "url": variant_url, "image_url": img_url,

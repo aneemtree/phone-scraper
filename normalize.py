@@ -62,6 +62,15 @@ COLORS = [
     "indigo", "morning", "shadow", "bahama", "marble", "silky", "noble", "just",
     "norway", "nebula", "nerbula", "eternal", "ethernal",
     "mineral",
+    # Triage 2026-06-23 edition/colour leaks (trailing marketing words on the
+    # model). Multi-word first. SKIPS real model words: magic (Honor Magic),
+    # velvet (LG Velvet), hot (Infinix Hot), power (Moto Power), nova (Honor/
+    # Huawei Nova).
+    "pantone poinciana", "arrow glow", "dark nova", "cyber rage",
+    "leaf", "poinciana", "pantone", "caneel", "luxe", "aura", "cosmic",
+    "surfing", "seawater", "mystique", "sundarbans", "dawn", "raging",
+    "lumina", "clash", "cyber", "ceramic", "frosted", "legend", "legendary",
+    "brand",
 ]
 
 # Roman numerals (II-XII) that title-casing would lower-case (e.g. Sony "Xperia 1
@@ -325,6 +334,8 @@ def clean_model(title: str) -> str:
     t = t.replace(":", " ")  # phones never contain a colon — drop any stray ones
     # Brand typo seen in store titles: "Samung Galaxy S23" -> Samsung.
     t = re.sub(r"\bsamung\b", "Samsung", t, flags=re.I)
+    # Sharp "Aquas" is a common misspelling of the Aquos line.
+    t = re.sub(r"\baquas\b", "Aquos", t, flags=re.I)
     t = re.sub(r"\b(sale|offer|deals?|festive|bonanza|clearance)\b", " ", t, flags=re.I)
     # Month / festival names only appear in promo titles (never in a model name),
     # so strip them too — covers promos written WITHOUT a colon ("November Sale
@@ -388,7 +399,7 @@ def clean_model(title: str) -> str:
     for c in COLORS:                                     # colors (longest first)
         t = re.sub(rf"\b{re.escape(c)}\b", " ", t, flags=re.I)
     t = re.sub(r"\s*,\s*", " ", t)                       # drop orphaned commas
-    t = re.sub(r"\b(refurbished|renewed|pre-?owned|pre-?loved|used|open\s*box|certified|certified refurbished)\b", " ", t, flags=re.I)
+    t = re.sub(r"\b(refurbished|refubished|renewed|pre-?owned|pre-?loved|used|open\s*box|certified|certified refurbished)\b", " ", t, flags=re.I)
     t = re.sub(r"^buy\s+", "", t, flags=re.I)  # strip leading "Buy " prefix
 
     # Normalize iPhone/iPad casing EARLY so later passes (model-number stripping,

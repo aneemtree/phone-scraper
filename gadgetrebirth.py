@@ -133,6 +133,19 @@ def _better_offer(new_availability, new_price, cur):
     return new_price < cur["price"]
 
 
+def ram_from_specs(prod):
+    """Product-level RAM from the API `specs` dict ("RAM": "12 GB"). A RANGE
+    ("8 / 12 GB") means the product spans both RAMs with no per-variant axis, so
+    return None (don't guess); a single value is captured. RAM isn't part of the
+    variant_key — it just fills phones.ram so the web places the offer on the
+    right per-RAM card."""
+    val = str((prod.get("specs") or {}).get("RAM") or "")
+    if not val or "/" in val:
+        return None
+    m = re.search(r"(\d+)\s*GB", val, re.I)
+    return f"{m.group(1)}GB" if m else None
+
+
 def build_offers(products, include_oos=False):
     """Pure parse: products -> {(variant_key, condition): offer}. No DB.
     Keeps the LOWEST color price per (condition, storage); prefers in-stock over
@@ -146,6 +159,7 @@ def build_offers(products, include_oos=False):
             continue
         url = f"{BASE_URL}/product/{prod.get('sku', '')}/"
         img_url = get_image(prod)
+        ram = ram_from_specs(prod)
         # Product-level warranty in DAYS (1 month = 30d, matching db.months_to_days
         # — inlined so build_offers stays import-free for --dry). `warrantyMonths`
         # is the whole-month value; a "15-days" `warrantyOption` (warrantyMonths 0)
@@ -183,7 +197,7 @@ def build_offers(products, include_oos=False):
             bkey = (variant_key, cond)
             if _better_offer(availability, price, best.get(bkey)):
                 best[bkey] = {
-                    "model": model, "storage": storage, "variant_key": variant_key,
+                    "model": model, "storage": storage, "variant_key": variant_key, "ram": ram,
                     "condition": cond, "price": price, "availability": availability,
                     "url": url, "image_url": img_url,
                     "warranty_days": warranty_days,
@@ -216,7 +230,7 @@ def scrape():
 
         pid = save_phone(
             SITE, o["name"], o["url"], final_image,
-            o["model"], o["storage"], None, o["variant_key"],
+            o["model"], o["storage"], o.get("ram"), o["variant_key"],
             in_stock=(o["name"] in in_stock_names),
         )
         save_price(pid, o["price"], availability=o["availability"],

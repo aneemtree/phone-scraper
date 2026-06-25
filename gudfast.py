@@ -77,6 +77,17 @@ def ram_from_title(name, permalink=""):
             or normalize_ram((permalink or "").replace("-", " ")))
 
 
+def ram_from_desc(short_html):
+    """Fallback: GudFast's short_description highlight line carries the RAM even
+    when the title/slug don't ("8 GB RAM | 256 GB ROM | ..."). HTML stripped; a
+    slash RANGE stays None. normalize_ram requires the word RAM, so the "256 GB
+    ROM" storage token is never misread as RAM."""
+    text = re.sub(r"<[^>]+>", " ", html.unescape(short_html or ""))
+    if re.search(r"\d+\s*GB\s*/\s*\d+\s*GB\s*RAM", text, re.I):
+        return None
+    return normalize_ram(text)
+
+
 def build_model(name):
     """Clean a GudFast title into a model name. Titles carry a marketing tail
     ('… – Good Condition | 1 Month Warranty | 5 Days Replacement') and bracketed
@@ -212,7 +223,7 @@ def build_offers(products, include_oos=False):
 
         vkey = make_variant_key(model, storage, None)
         permalink = prod.get("permalink") or f"{BASE_URL}/product/{prod.get('slug','')}/"
-        ram = ram_from_title(raw_name, permalink)
+        ram = ram_from_title(raw_name, permalink) or ram_from_desc(prod.get("short_description"))
         images = prod.get("images") or []
         prod_img = images[0].get("src") if images else None
         # Native Woo per-product reviews (stored only when there's at least one).

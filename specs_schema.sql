@@ -96,13 +96,13 @@ create view missing_images as
                        and coalesce(sx.image_url, sx.image_fallback) is not null)
   group by ph.model;
 
--- Admin RAM-assign queue: IN-STOCK non-Apple phone rows with no RAM whose
--- storage (variant_key) ships in >=2 distinct RAMs, so the offer can't be auto-
--- placed on the right per-RAM card. The web folds it into every per-RAM card
--- until an admin assigns the real RAM at /admin/ram (sets phones.ram, which
--- db.save_phone then preserves across scrapes). Scoped to in_stock: OOS rows
--- aren't buyable and self-heal their RAM on the next scrape-catalog (INCLUDE_OOS)
--- run that re-parses the source. Apple excluded (iPhones don't vary RAM).
+-- Admin RAM-assign queue: non-Apple phone rows (in-stock AND out-of-stock) with
+-- no RAM whose storage (variant_key) ships in >=2 distinct RAMs, so the offer
+-- can't be auto-placed on the right per-RAM card. The web folds it into every
+-- per-RAM card until an admin assigns the real RAM at /admin/ram (sets
+-- phones.ram, which db.save_phone then preserves across scrapes). OOS rows are
+-- INCLUDED so missing listings can still be captured; the `in_stock` column is
+-- exposed so admin can see status. Apple excluded (iPhones don't vary RAM).
 drop view if exists ram_collisions;
 create view ram_collisions as
  with rams as (
@@ -121,7 +121,6 @@ create view ram_collisions as
    from phones p
    join rams r on r.variant_key = p.variant_key
   where p.ram is null
-    and p.in_stock = true
     and array_length(r.ram_options, 1) >= 2
     and lower(p.model) not like 'apple%'
     and lower(p.model) not like '%iphone%'

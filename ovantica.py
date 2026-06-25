@@ -123,6 +123,19 @@ def extract_variant_objects(payload, key='"condition"'):
     return out
 
 
+def ram_from_name(name):
+    """Ovantica bakes "(RAM, STORAGE)" into the product name, e.g.
+    "Buy Oppo A96 (8GB, 128GB) Black - Renewed" -> 8GB RAM. The two GB tokens in
+    the parenthetical are (RAM, storage); the SMALLER is the RAM. Returns None if
+    there's no such pair (or both look like storage, i.e. min > 24GB) — the RSC
+    variant object itself has no RAM field, this name string is the only signal."""
+    m = re.search(r"\(\s*(\d+)\s*GB\s*,\s*(\d+)\s*GB\s*\)", name or "", re.I)
+    if not m:
+        return None
+    ram = min(int(m.group(1)), int(m.group(2)))
+    return f"{ram}GB" if ram <= 24 else None
+
+
 def _variant_image(v):
     """Resolve a variant's image (the RSC stores it as a JSON array string)."""
     raw = v.get("image")
@@ -210,7 +223,7 @@ def parse_product_page(path):
             best[key] = {
                 "price": price, "storage": storage, "condition": condition,
                 "vid": v.get("id"), "image": _variant_image(v),
-                "availability": availability,
+                "availability": availability, "ram": ram_from_name(v.get("name", "")),
             }
 
     results = []
@@ -220,6 +233,7 @@ def parse_product_page(path):
         results.append({
             "model": model,
             "storage": normalize_storage(storage),
+            "ram": d.get("ram"),
             "condition": normalize_condition(d["condition"]),
             "price": d["price"],
             "availability": d["availability"],
@@ -265,7 +279,7 @@ def scrape():
                 bkey = (vkey, v["condition"])
                 if better_offer(v["availability"], v["price"], best.get(bkey)):
                     best[bkey] = {
-                        "model": v["model"], "storage": v["storage"], "ram": None,
+                        "model": v["model"], "storage": v["storage"], "ram": v.get("ram"),
                         "variant_key": vkey, "condition": v["condition"],
                         "price": v["price"], "availability": v["availability"],
                         "url": v["url"], "image_url": v["img_url"],

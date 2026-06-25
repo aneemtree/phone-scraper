@@ -112,11 +112,19 @@ def save_phone(site, name, url, image_url, model, storage, ram, variant_key, in_
     if existing.data:
         pid = existing.data[0]["id"]
         # Stamp last_seen_at for the OOS sweep; in_stock reflects this sighting.
-        _exec(lambda: supabase.table("phones").update({
+        update = {
             "url": url, "image_url": image_url, "model": model,
-            "storage": storage, "ram": ram, "variant_key": variant_key,
+            "storage": storage, "variant_key": variant_key,
             "last_seen_at": now, "in_stock": in_stock,
-        }).eq("id", pid).execute())
+        }
+        # Preserve a known RAM when this scrape doesn't carry one: many stores
+        # never surface RAM (they pass ram=None), but the value may have been
+        # filled by an ADMIN assignment (app/admin/ram, for the no-RAM-on-a-
+        # multi-RAM-storage cases) or an earlier richer sighting. Overwriting it
+        # with None would wipe that on every run. A non-null ram still wins.
+        if ram is not None:
+            update["ram"] = ram
+        _exec(lambda: supabase.table("phones").update(update).eq("id", pid).execute())
         _note_op(2)
         return pid
 

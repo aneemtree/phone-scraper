@@ -43,6 +43,50 @@ def missing_images():
         return []
 
 
+def _norm_ram(ram):
+    """Match the web's RAM normalisation (lib/queries.js): lowercase, drop spaces
+    + the word 'ram', so '12GB'/'12GB RAM'/'12gbram' unify. Returns None if empty."""
+    if not ram:
+        return None
+    r = (ram or "").lower().replace(" ", "").replace("ram", "")
+    return r or None
+
+
+def _is_apple(model):
+    m = (model or "").lower()
+    return m.startswith("apple") or "iphone" in m or "ipad" in m
+
+
+def ram_gaps():
+    """Android storage variants (variant_key) that have BOTH a null-RAM listing
+    AND >=1 real-RAM listing. A store that lists a phone WITHOUT its RAM, on a
+    storage that DOES come in multiple RAM configs (e.g. S23 Ultra 256GB = 8/12GB),
+    can't be placed under the right per-RAM card — the web folds it into every RAM
+    card as a fallback, but the clean fix is the SCRAPER capturing RAM for that
+    listing. Apple is excluded (iPhones don't vary RAM within a model). Returns a
+    list of dicts sorted by null-RAM in-stock listings desc, [] if none."""
+    rows = _fetch_all("phones", "variant_key,model,ram,in_stock")
+    by = {}
+    for r in rows:
+        vk = r.get("variant_key")
+        if not vk or _is_apple(r.get("model")):
+            continue
+        d = by.setdefault(vk, {"model": r.get("model") or "", "rams": set(),
+                               "null_total": 0, "null_instock": 0})
+        nr = _norm_ram(r.get("ram"))
+        if nr:
+            d["rams"].add(nr)
+        else:
+            d["null_total"] += 1
+            if r.get("in_stock"):
+                d["null_instock"] += 1
+    out = [{"variant_key": vk, "model": d["model"], "ram_configs": len(d["rams"]),
+            "null_total": d["null_total"], "null_instock": d["null_instock"]}
+           for vk, d in by.items() if len(d["rams"]) >= 2 and d["null_total"] > 0]
+    out.sort(key=lambda x: (-x["null_instock"], -x["ram_configs"], x["model"].lower()))
+    return out
+
+
 def scraper_health():
     """Per-site yield anomalies from scrape_runs (silent breakage). Returns a list
     of (site, reason), [] if all healthy, or None if the table isn't populated."""
@@ -131,6 +175,24 @@ def main():
             out.append(f"| {r.get('model','')} | {r.get('sample_name','')} | {r.get('offer_count','')} |")
         if len(imgs) > 100:
             out.append(f"\n_…and {len(imgs) - 100} more._")
+    else:
+        out.append("None. 🎉")
+
+    out.append("\n### Android RAM gaps (null RAM on a multi-RAM storage)\n")
+    gaps = ram_gaps()
+    if gaps:
+        out.append("These Android storage variants come in >1 RAM config but ALSO "
+                   "have listing(s) with NO RAM captured, so the no-RAM offer can't "
+                   "be placed under the right per-RAM card. Fix = capture RAM in the "
+                   "store's scraper for these (or add the RAM to the listing's name). "
+                   "Apple is excluded (iPhones don't vary RAM within a model).\n")
+        out.append("| Variant key | Model | RAM configs | No-RAM (in stock) |")
+        out.append("|---|---|---|---|")
+        for g in gaps[:60]:
+            out.append(f"| `{g['variant_key']}` | {g['model']} | {g['ram_configs']} | "
+                       f"{g['null_total']} ({g['null_instock']}) |")
+        if len(gaps) > 60:
+            out.append(f"\n_…and {len(gaps) - 60} more._")
     else:
         out.append("None. 🎉")
 

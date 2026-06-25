@@ -187,6 +187,24 @@ the key is deterministic and storage-only, the same physical phone already share
 one variant_key across stores once names are clean — so cross-store grouping needs
 no separate merge step.
 
+phones.ram CAPTURE + PRESERVE (IMPORTANT): the web splits a storage into a card
+per RAM (Android only — iPhones never split), so a store that lists a multi-RAM
+storage WITHOUT its RAM can't be placed on the right card. Capture RAM wherever a
+store's own data exposes it (store-specific parsing, hand the value to save_phone
+as `ram`): gudfast (ram_from_title — explicit "N GB RAM" in the title, else the
+permalink slug), budli (ram_from_title — a single labelled RAM; a slash RANGE
+"8GB/12GB RAM" stays null), gadgetrebirth (ram_from_specs — product-level
+`specs.RAM`, single value only; a range stays null). Stores that genuinely DON'T
+expose per-variant RAM stay null: ovantica's RSC variant object has no RAM field
+(validated), gudfast/gadgetrebirth ranges are ambiguous. Beebom can't fill the gap
+either — its page server-renders only the SELECTED variant's RAM; the full
+variant dropdown is client-rendered. db.save_phone() PRESERVES a known ram when a
+scrape carries none (incoming ram=None no longer overwrites a non-null value) so a
+later admin assignment (web /admin/ram) or a richer sighting isn't wiped each run;
+a non-null ram still wins. The residual null-on-multi-RAM rows surface in triage
+(triage.py ram_gaps()) AND in the web `ram_collisions` view for manual admin
+assignment.
+
 ### Out-of-stock tracking
 Availability is tracked on the `phones` table: `in_stock` (bool), `last_seen_at`,
 plus `updated_at` (auto-maintained by a trigger; also on prices/stores/specs).

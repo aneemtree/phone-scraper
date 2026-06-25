@@ -54,8 +54,9 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 MODEL = "claude-haiku-4-5"
 RECENT_POST_DAYS = 14      # window for "did we already cover this story?"
 MAX_SOURCE_CHARS = 4000    # per-article text passed to the model
-MAX_TOTAL_CHARS = 12000    # across a cluster
+MAX_TOTAL_CHARS = 12000    # across a cluster (the SOURCE article budget)
 MIN_ARTICLE_CHARS = 400    # below this, extraction is considered failed
+RECENT_BLOCK_CHARS = 5000  # cap on the recent-posts (dedup) block — see write_post
 
 STOPWORDS = {
     "the", "a", "an", "of", "to", "in", "on", "for", "and", "or", "is", "are",
@@ -301,6 +302,10 @@ SYSTEM_PROMPT = (
     "Rules:\n"
     "- Write a COMPLETELY ORIGINAL article in your own words based on the "
     "source articles provided. Never copy sentences or distinctive phrasing.\n"
+    "- WRITE ONLY ABOUT THE STORY IN THE SOURCE ARTICLES. The list of recently "
+    "published posts is provided SOLELY so you can detect duplicates — it is NOT "
+    "your subject matter. Never write about a phone or topic that appears only in "
+    "that recent-posts list and is not covered by the source articles.\n"
     "- 3 to 6 paragraphs, 250-450 words total. Plain text paragraphs, no "
     "markdown, no headings, no links.\n"
     "- VOICE: sound like a real person who loves phones telling a friend the "
@@ -375,17 +380,37 @@ def write_post(cluster, sources_text, recent_posts):
     recent = "\n".join(
         f"- {p['title']} (slug: {p['slug']})\n  gist: {_post_gist(p)}"
         for p in recent_posts) or "(none)"
+    # Bound the recent-posts (dedup) block so it can NEVER crowd the source
+    # articles out of the prompt. CRITICAL: recent_posts grows to ~60 entries
+    # (~19k chars). The old prompt put `recent` FIRST and hard-truncated the
+    # whole string to ~14k, so once the blog filled up the recent block ate the
+    # entire budget and the actual SOURCE articles were truncated off entirely —
+    # the writer then had no article to read and fabricated a post about whatever
+    # topic dominated the recent list (e.g. publishing an "OnePlus N6" story from
+    # "Nothing Phone 4b" sources), which also snowballed run-over-run. Each
+    # section is now bounded INDEPENDENTLY and the sources come FIRST.
+    if len(recent) > RECENT_BLOCK_CHARS:
+        recent = recent[:RECENT_BLOCK_CHARS] + "\n- ...(older posts omitted)"
+
     src_blocks = []
     for art, text in sources_text:
         src_blocks.append(
             f"SOURCE: {art['source_domain']}\nHEADLINE: {art['title']}\n"
             f"ARTICLE TEXT:\n{text[:MAX_SOURCE_CHARS]}"
         )
+    sources_section = "\n\n---\n\n".join(src_blocks)[:MAX_TOTAL_CHARS]
+
+    # Sources FIRST (the article to actually write from), recent posts AFTER and
+    # clearly fenced as dedup-only context.
     user = (
-        f"Recently published posts on our blog:\n{recent}\n\n"
-        f"New story, covered by {len(src_blocks)} source(s):\n\n"
-        + "\n\n---\n\n".join(src_blocks)
-    )[: MAX_TOTAL_CHARS + 2000]
+        f"New story to write about, reported by {len(src_blocks)} source "
+        f"article(s) below. Write your post ONLY from these sources, about the "
+        f"exact phone/topic they cover:\n\n"
+        f"{sources_section}\n\n"
+        f"=== Recently published posts (for DUPLICATE DETECTION ONLY — never write "
+        f"about a topic that appears only here and not in the sources above) ===\n"
+        f"{recent}"
+    )
 
     response = client.messages.create(
         model=MODEL,

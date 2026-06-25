@@ -695,7 +695,20 @@ whole scheduled queue deprioritized, which was also delaying scrape.yml).
     posts add a gist from their paragraphs) — comparing story SUBSTANCE not just
     titles, since two reworded headlines about the same event share almost no
     title words but the same gist (this was letting near-dupes through, e.g.
-    "Foldable iPhone $2,000 downturn" vs "iPhone Fold $2,000 recession"). If the
+    "Foldable iPhone $2,000 downturn" vs "iPhone Fold $2,000 recession").
+    PROMPT BUDGET (IMPORTANT, write_post): the SOURCE articles come FIRST and the
+    recent-posts/dedup block is bounded SEPARATELY (RECENT_BLOCK_CHARS) — each
+    section is capped on its own, never the concatenation. A prior bug put the
+    recent block first and hard-truncated the combined string, so once the blog
+    filled up (~60 recent posts ≈ 19k chars) the recent list ate the whole budget
+    and the SOURCE articles were truncated off entirely; the writer, left with no
+    article to read, fabricated posts about whatever topic dominated the recent
+    list (e.g. an "OnePlus N6" body under "Nothing Phone 4b" sources) and it
+    snowballed run-over-run. Lesson: never let auxiliary/dedup context share one
+    truncation budget with the primary inputs — bound them independently, primary
+    first. (The 36 corrupted posts were deleted; the fix is the section ordering +
+    per-section caps + a system-prompt line that the recent list is dedup-only.)
+    If the
     story RESURFACES from another outlet, the model returns duplicate_of=<slug>
     (biased toward marking a dup when phone + news beat match) and the new outlets
     are attached to that post's `sources` instead of publishing a second post. This single

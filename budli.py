@@ -88,14 +88,26 @@ def storage_opt_pos(prod):
     return None
 
 
-def ram_from_title(title):
-    """RAM from the title ONLY when a single, unambiguous value is labelled (e.g.
-    '128GB 6GB RAM' -> 6GB). A SLASH RANGE ('8GB/12GB RAM') means the listing
-    didn't pin a RAM, so return None (don't guess one) — Budli is title-parsed
-    and many titles carry such ranges."""
-    if re.search(r"\d+\s*GB\s*/\s*\d+\s*GB\s*RAM", title or "", re.I):
+def ram_from_text(text):
+    """A single, unambiguous labelled RAM ("12 GB RAM" -> 12GB) from any text. A
+    SLASH RANGE ("8GB/12GB RAM") is ambiguous -> None. normalize_ram requires the
+    word RAM, so a bare storage token is never misread."""
+    if re.search(r"\d+\s*GB\s*/\s*\d+\s*GB\s*RAM", text or "", re.I):
         return None
-    return normalize_ram(title or "")
+    return normalize_ram(text or "")
+
+
+def ram_from_title(title):
+    """Backwards-compatible alias — RAM from the product title."""
+    return ram_from_text(title)
+
+
+def ram_from_body(body_html):
+    """RAM from the product BODY (Budli's Specifications block reliably carries
+    "Memory: 12 GB RAM" on every listing, even when the title omits it or a
+    cheaper colliding listing wins the per-(variant,condition) dedup). HTML is
+    stripped first."""
+    return ram_from_text(re.sub(r"<[^>]+>", " ", body_html or ""))
 
 
 def storage_from_title(title):
@@ -167,7 +179,7 @@ def scrape():
         img_url = get_image(prod)
         warranty_days, warranty_label = warranty_from_body(prod.get("body_html", ""))
         title_storage = storage_from_title(title)
-        title_ram = ram_from_title(title)
+        title_ram = ram_from_title(title) or ram_from_body(prod.get("body_html", ""))
         spos = storage_opt_pos(prod)
 
         variants = prod.get("variants", [])

@@ -123,6 +123,17 @@ def extract_variant_objects(payload, key='"condition"'):
     return out
 
 
+def ram_from_variant(v):
+    """Ovantica's RAM. The RSC variant carries it in a (mislabelled) `rom` field
+    ("rom":"12 GB" is the RAM; `storage` is the real storage). Fall back to the
+    "(RAM, STORAGE)" parenthetical baked into the variant `name` when rom is
+    absent. <=24GB guard so a stray storage value in rom isn't read as RAM."""
+    m = re.search(r"(\d+)\s*GB", v.get("rom") or "", re.I)
+    if m and int(m.group(1)) <= 24:
+        return f"{m.group(1)}GB"
+    return ram_from_name(v.get("name", ""))
+
+
 def ram_from_name(name):
     """Ovantica bakes "(RAM, STORAGE)" into the product name, e.g.
     "Buy Oppo A96 (8GB, 128GB) Black - Renewed" -> 8GB RAM. The two GB tokens in
@@ -223,7 +234,7 @@ def parse_product_page(path):
             best[key] = {
                 "price": price, "storage": storage, "condition": condition,
                 "vid": v.get("id"), "image": _variant_image(v),
-                "availability": availability, "ram": ram_from_name(v.get("name", "")),
+                "availability": availability, "ram": ram_from_variant(v),
             }
 
     results = []

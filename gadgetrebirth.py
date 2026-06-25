@@ -146,6 +146,22 @@ def ram_from_specs(prod):
     return f"{m.group(1)}GB" if m else None
 
 
+def storage_ram_from_option(opt):
+    """gadgetrebirth's Storage option BUNDLES the RAM ("128GB / 8GB" = storage /
+    RAM), per-variant and exact. Returns (normalized storage, RAM): the largest
+    GB/TB token is storage; a smaller (<=24GB) token is the RAM. A bare "256GB"
+    -> (256GB, None). This is sharper than the product-level specs.RAM (often a
+    range), so it's preferred when present."""
+    toks = re.findall(r"(\d+)\s*(GB|TB)", opt or "", re.I)
+    if not toks:
+        return None, None
+    sizes = [(int(n) * (1024 if u.upper() == "TB" else 1), f"{n}{u.upper()}") for n, u in toks]
+    storage = max(sizes, key=lambda s: s[0])[1]
+    rams = [s for s in sizes if s[0] <= 24 and s[1] != storage]
+    ram = f"{min(rams, key=lambda s: s[0])[0]}GB" if rams else None
+    return normalize_storage(storage), ram
+
+
 def build_offers(products, include_oos=False):
     """Pure parse: products -> {(variant_key, condition): offer}. No DB.
     Keeps the LOWEST color price per (condition, storage); prefers in-stock over
@@ -176,14 +192,16 @@ def build_offers(products, include_oos=False):
         for v in variants:
             opts = v.get("options") or {}
             cond = norm_condition(opts.get("Condition"))
-            storage = normalize_storage(opts.get("Storage"))
+            storage, var_ram = storage_ram_from_option(opts.get("Storage"))
             price = v.get("price")
             if not cond or not storage or not price:
                 continue
             available = bool(v.get("active")) and (v.get("stock") or 0) > 0
             if not available and not include_oos:
                 continue
-            g = groups.setdefault((cond, storage), {"in": [], "oos": []})
+            g = groups.setdefault((cond, storage), {"in": [], "oos": [], "ram": None})
+            if var_ram:
+                g["ram"] = var_ram  # per-variant RAM from the Storage option
             (g["in"] if available else g["oos"]).append(float(price))
 
         for (cond, storage), g in groups.items():
@@ -197,7 +215,8 @@ def build_offers(products, include_oos=False):
             bkey = (variant_key, cond)
             if _better_offer(availability, price, best.get(bkey)):
                 best[bkey] = {
-                    "model": model, "storage": storage, "variant_key": variant_key, "ram": ram,
+                    "model": model, "storage": storage, "variant_key": variant_key,
+                    "ram": g.get("ram") or ram,
                     "condition": cond, "price": price, "availability": availability,
                     "url": url, "image_url": img_url,
                     "warranty_days": warranty_days,

@@ -96,6 +96,37 @@ create view missing_images as
                        and coalesce(sx.image_url, sx.image_fallback) is not null)
   group by ph.model;
 
+-- Admin RAM-assign queue: IN-STOCK non-Apple phone rows with no RAM whose
+-- storage (variant_key) ships in >=2 distinct RAMs, so the offer can't be auto-
+-- placed on the right per-RAM card. The web folds it into every per-RAM card
+-- until an admin assigns the real RAM at /admin/ram (sets phones.ram, which
+-- db.save_phone then preserves across scrapes). Scoped to in_stock: OOS rows
+-- aren't buyable and self-heal their RAM on the next scrape-catalog (INCLUDE_OOS)
+-- run that re-parses the source. Apple excluded (iPhones don't vary RAM).
+drop view if exists ram_collisions;
+create view ram_collisions as
+ with rams as (
+   select variant_key,
+          array_agg(distinct lower(replace(replace(ram, ' ', ''), 'ram', '')))
+            filter (where ram is not null) as ram_options
+     from phones
+    where lower(model) not like 'apple%'
+      and lower(model) not like '%iphone%'
+      and lower(model) not like '%ipad%'
+    group by variant_key
+ )
+ select p.id, p.site, p.name, p.model, p.storage, p.variant_key, p.url, p.in_stock,
+        r.ram_options,
+        (select min(pr.price) from prices pr where pr.phone_id = p.id) as last_price
+   from phones p
+   join rams r on r.variant_key = p.variant_key
+  where p.ram is null
+    and p.in_stock = true
+    and array_length(r.ram_options, 1) >= 2
+    and lower(p.model) not like 'apple%'
+    and lower(p.model) not like '%iphone%'
+    and lower(p.model) not like '%ipad%';
+
 -- ---------------------------------------------------------------------------
 -- Manual matching overrides. When a model's normalized name doesn't match
 -- GSMArena/Beebom, add a known-good variation here; both matchers try the model

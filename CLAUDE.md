@@ -192,11 +192,16 @@ per RAM (Android only — iPhones never split), so a store that lists a multi-RA
 storage WITHOUT its RAM can't be placed on the right card. Capture RAM wherever a
 store's own data exposes it (store-specific parsing, hand the value to save_phone
 as `ram`): gudfast (ram_from_title — explicit "N GB RAM" in the title, else the
-permalink slug), budli (ram_from_title — a single labelled RAM; a slash RANGE
-"8GB/12GB RAM" stays null), gadgetrebirth (ram_from_specs — product-level
-`specs.RAM`, single value only; a range stays null). Stores that genuinely DON'T
-expose per-variant RAM stay null: ovantica's RSC variant object has no RAM field
-(validated), gudfast/gadgetrebirth ranges are ambiguous. Beebom can't fill the gap
+permalink slug; some products list no RAM at all -> stay null), budli
+(ram_from_title for a single labelled RAM, ELSE ram_from_body — Budli's
+Specifications block reliably has "Memory: N GB RAM" even when the collection-feed
+title omits it or a cheaper colliding listing wins the dedup; a slash RANGE stays
+null), gadgetrebirth (ram_from_specs — product-level `specs.RAM`, single value
+only; a range stays null), ovantica (ram_from_name — the RSC variant OBJECT has no
+RAM field, but the variant `name` bakes "(RAM, STORAGE)" e.g. "Buy Oppo A96 (8GB,
+128GB) Black", smaller of the two GB tokens = RAM, <=24GB guard; names without the
+parenthetical stay null). Remaining null cases are genuine: gudfast/gadgetrebirth/
+budli ranges or products that list no RAM, controlz (DOM, not RAM-wired). Beebom can't fill the gap
 either — its page server-renders only the SELECTED variant's RAM; the full
 variant dropdown is client-rendered. db.save_phone() PRESERVES a known ram when a
 scrape carries none (incoming ram=None no longer overwrites a non-null value) so a

@@ -546,6 +546,15 @@ def run(dry=False):
                          .gte("created_at", since)
                          .order("created_at", desc=True).limit(60).execute()).data
 
+    _write_clusters(supabase, _exec, clusters, recent_posts, dry)
+
+
+def _write_clusters(supabase, _exec, clusters, recent_posts, dry=False):
+    """Shared cluster -> post writer used by both the live feed run() and the
+    orphan backfill. For each cluster: fetch full source text + lead image, gate
+    on relevance, write one post via the (source-grounded) writer, dedup against
+    recent_posts, and publish + link the articles. recent_posts is mutated in
+    place so later clusters in the same pass can dedup against just-written posts."""
     for cluster in clusters:
         titles = " | ".join(a["title"][:70] for a in cluster[:3])
         try:
@@ -706,11 +715,54 @@ def backfill_images():
     print(f"done: {filled}/{len(posts)} filled")
 
 
+def backfill_orphans(dry=False):
+    """One-off (`python3 news.py --backfill-orphans`): regenerate posts for the
+    source articles that have NO post (news_articles.post_id IS NULL). These are
+    the sources of posts deleted because the writer-prompt bug made them ignore
+    their sources, plus clusters previously skipped. We re-cluster the orphans and
+    run the SAME (now source-grounded) write path; non-phone/unfetchable clusters
+    are simply re-skipped by the existing gates, so it's safe to feed everything.
+    Articles are re-fetched fresh, so any URL that has since 404'd just drops out."""
+    from db import supabase, _exec
+
+    rows = _exec(lambda: supabase.table("news_articles")
+                 .select("url, title, source_domain, snippet, published_at")
+                 .is_("post_id", "null").execute()).data
+    # Reconstruct feed-style entries; drop any row missing a url/title.
+    seen = set()
+    entries = []
+    for r in rows:
+        url, title = r.get("url"), r.get("title")
+        if not url or not title or url in seen:
+            continue
+        seen.add(url)
+        entries.append({"url": url, "title": title,
+                        "source_domain": r.get("source_domain")
+                        or urlparse(url).netloc.removeprefix("www."),
+                        "snippet": r.get("snippet"), "published": r.get("published_at")})
+    print(f"{len(entries)} orphan article(s) with no post")
+    if not entries:
+        return
+
+    clusters = cluster_articles(entries)
+    print(f"{len(clusters)} story cluster(s) to backfill")
+
+    # Dedup against ALL current posts (the bad ones are gone, the good ones stay)
+    # so a backfilled story doesn't duplicate one that's already live.
+    recent_posts = _exec(lambda: supabase.table("blog_posts")
+                         .select("id, slug, title, sources, image_url, body_html")
+                         .order("created_at", desc=True).limit(200).execute()).data
+
+    _write_clusters(supabase, _exec, clusters, recent_posts, dry)
+
+
 if __name__ == "__main__":
     init_sentry("news")
     try:
         if "--backfill-images" in sys.argv:
             backfill_images()
+        elif "--backfill-orphans" in sys.argv:
+            backfill_orphans(dry="--dry" in sys.argv)
         else:
             run(dry="--dry" in sys.argv)
     except Exception as exc:

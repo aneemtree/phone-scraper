@@ -8,10 +8,10 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "normal = write new posts; backfill-images = fill images on existing posts"
+        description: "normal = write new posts; backfill-images = fill images on existing posts; backfill-orphans = regenerate posts for source articles that have none"
         type: choice
         default: normal
-        options: [normal, backfill-images]
+        options: [normal, backfill-images, backfill-orphans]
 
 jobs:
   news:
@@ -35,4 +35,4 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install requests supabase python-dotenv sentry-sdk boto3 anthropic trafilatura
-      - run: python3 news.py ${{ inputs.mode == 'backfill-images' && '--backfill-images' || '' }}
+      - run: python3 news.py ${{ inputs.mode == 'backfill-images' && '--backfill-images' || (inputs.mode == 'backfill-orphans' && '--backfill-orphans' || '') }}

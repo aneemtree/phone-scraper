@@ -362,6 +362,11 @@ def clean_model(title: str) -> str:
         t = re.sub(r"\b2nd\s+gen\w*", "2020", t, flags=re.I)
         t = re.sub(r"\b3rd\s+gen\w*", "2022", t, flags=re.I)
         t = re.sub(r"\bSE\s*\(\s*(20\d{2})\s*\)", r"SE \1", t, flags=re.I)
+    # iPhone e-suffix models (16e) use a LOWERCASE e; some stores capitalise it
+    # ("iPhone 16E"), which would leave a stray "16E" model that won't group with
+    # the canonical "16e" (case-sensitive sibling grouping on the web). Force the
+    # suffix lowercase. Scoped to iPhone so it can't touch other brands' "E".
+    t = re.sub(r"\b(iphone\s*\d+)\s*e\b", r"\1e", t, flags=re.I)
     t = re.sub(r"\bphone\s*\(\s*(\d+[a-z]?)\s*\)", r"Phone \1", t, flags=re.I)
     t = re.sub(r"\(.*?\)", " ", t)                      # remove (...) groups
     t = re.sub(r"\s*/\s*", " ", t)                       # "128GB/256GB" -> tokens

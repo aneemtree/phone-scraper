@@ -38,7 +38,7 @@ def fetch_phones():
     rows, start = [], 0
     while True:
         chunk = (sb.table("phones")
-                 .select("id, model, storage, ram, variant_key, site, name")
+                 .select("id, model, storage, ram, variant_key, site, name, in_stock, last_seen_at")
                  .order("id").range(start, start + 999).execute().data)
         rows += chunk
         if len(chunk) < 1000:
@@ -120,6 +120,47 @@ def pass1_renormalize(phones):
     return updated
 
 
+def pass2_delete_stale_orphans(phones):
+    """Delete STALE OUT-OF-STOCK duplicate rows left behind when a name
+    normalization changed a row's saved name (so save_phone, keyed by raw name,
+    created a new row and orphaned the old). Signature: an OOS row whose
+    (site, variant_key) has a MORE-RECENTLY-seen row, AND that is redundant —
+    its RAM is null OR a fresher sibling has the same RAM. The redundant-RAM
+    guard PROTECTS legit distinct-RAM OOS rows at RAM-folding stores (oldsold/
+    itradeit/samsungcr): a 12GB row going OOS while an 8GB stays in stock is NOT
+    a duplicate, so it's kept. Run AFTER Pass 1 so variant_keys are already clean
+    (that's what makes the orphan share its live twin's key)."""
+    from collections import defaultdict
+    print("\n── Pass 2: deleting stale OOS duplicate rows ──")
+    norm_ram = lambda r: ((r or "").lower().replace(" ", "").replace("ram", "") or None)
+    ls = lambda p: p.get("last_seen_at") or ""  # ISO strings compare lexically
+    groups = defaultdict(list)
+    for p in phones:
+        groups[(p.get("site"), p.get("variant_key"))].append(p)
+    deleted = 0
+    for rows in groups.values():
+        if len(rows) < 2:
+            continue
+        newest = max(ls(p) for p in rows)
+        for p in rows:
+            if p.get("in_stock") or ls(p) >= newest or not ls(p):
+                continue  # in stock, or it IS the newest -> keep
+            pr = norm_ram(p.get("ram"))
+            redundant = pr is None or any(
+                ls(q) > ls(p) and norm_ram(q.get("ram")) == pr for q in rows)
+            if not redundant:
+                continue  # a legit distinct-RAM OOS variant -> keep
+            pid = p["id"]
+            try:
+                sb.table("prices").delete().eq("phone_id", pid).execute()
+                sb.table("phones").delete().eq("id", pid).execute()
+                deleted += 1
+            except Exception as e:
+                print(f"  Delete error for {pid}: {e}")
+    print(f"Pass 2 complete: {deleted} stale OOS duplicates deleted")
+    return deleted
+
+
 def normalize():
     print("Fetching all phones from DB...")
     phones = fetch_phones()
@@ -131,6 +172,8 @@ def normalize():
         print(f"Phones remaining after cleanup: {len(phones)}")
 
     pass1_renormalize(phones)
+    # Re-fetch so Pass 2 dedups on the freshly-recomputed variant_keys.
+    pass2_delete_stale_orphans(fetch_phones())
     print("\n✓ Normalization complete.")
 
 

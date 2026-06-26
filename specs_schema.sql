@@ -124,7 +124,14 @@ create view ram_collisions as
     and array_length(r.ram_options, 1) >= 2
     and lower(p.model) not like 'apple%'
     and lower(p.model) not like '%iphone%'
-    and lower(p.model) not like '%ipad%';
+    and lower(p.model) not like '%ipad%'
+    -- skip rows the same store already resolved on a sibling row (the RAM for
+    -- that store+variant is already known, so this null row is a stale/redundant
+    -- duplicate). normalize_db Pass 2 deletes such stale OOS orphans entirely.
+    and not exists (
+      select 1 from phones q
+      where q.site = p.site and q.variant_key = p.variant_key and q.ram is not null
+    );
 
 -- ---------------------------------------------------------------------------
 -- Manual matching overrides. When a model's normalized name doesn't match

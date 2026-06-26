@@ -649,7 +649,19 @@ normalize_db.py (runs AFTER all scrapers, full pipeline + monthly catalog):
 deterministic, no AI/API key. Pass 0 deletes non-phones via is_phone(); Pass 1
 re-runs clean_model()/make_variant_key() over every row so existing data picks up
 normalization-rule improvements in place (recomputes model + variant_key; leaves
-the raw `name`). Cross-store duplicate merging is NOT a separate step — the
+the raw `name`). Pass 2 (pass2_delete_stale_orphans, runs AFTER Pass 1 on
+re-fetched rows) DELETES stale OOS duplicate rows: when a name-normalization
+changes a row's saved name, save_phone (keyed by raw name) creates a NEW row and
+ORPHANS the old one (out of stock, never re-scraped, e.g. a leaked-condition
+"... Good ..." name superseded by the cleaned name). Pass 2 drops an OOS row when
+its (site, variant_key) has a MORE-RECENTLY-seen row AND it's redundant — null
+RAM, or a fresher sibling has the SAME RAM. The same-RAM guard PROTECTS legit
+distinct-RAM OOS rows at RAM-folding stores (oldsold/itradeit/samsungcr: a 12GB
+going OOS while 8GB stays in stock is kept). This is what stopped 482 such
+orphans (170 null-RAM) from polluting the web `ram_collisions` admin queue. The
+`ram_collisions` view ALSO now skips a null-RAM row when the same store+variant
+has a RAM-bearing sibling (the RAM is already known) — belt-and-suspenders for
+orphans Pass 2 hasn't swept yet. Cross-store duplicate merging is NOT a separate step — the
 deterministic storage-only variant_key already groups the same phone across stores
 once names are clean. canonical_key stays for the manual merge fallback only.
 This replaced the old AI-based normalize_ai.py (dropped): "learn from what we have

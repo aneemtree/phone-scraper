@@ -71,6 +71,10 @@ COLORS = [
     "surfing", "seawater", "mystique", "sundarbans", "dawn", "raging",
     "lumina", "clash", "cyber", "ceramic", "frosted", "legend", "legendary",
     "brand",
+    # Triage 2026-06-27 colour leaks. SKIPS real model words: magic (Honor Magic),
+    # hot (Infinix Hot), aqua (Intex Aqua), velvet (LG Velvet), berry, super, light.
+    "copper", "caviar", "noir", "artic", "jazz", "ganges", "thunder",
+    "brilliant", "brushed", "raven", "dawnlight", "ultramarine",
 ]
 
 # Roman numerals (II-XII) that title-casing would lower-case (e.g. Sony "Xperia 1
@@ -511,6 +515,12 @@ def clean_model(title: str) -> str:
     t = re.sub(r"\b(india|indian|global|international|export|us|usa|uk|eu)\b", " ", t, flags=re.I)
     # Packaging/condition noise
     t = re.sub(r"\b(with\s+box|without\s+box|brand\s+box|original\s+box|sealed\s+box|open\s+box)\b", " ", t, flags=re.I)
+    # A bare trailing "Box" leaks too ("Galaxy A35 Box", "S24 Box", "Reno 8 Box");
+    # no phone model contains the word "Box", so strip it standalone.
+    t = re.sub(r"\bbox\b", " ", t, flags=re.I)
+    # "Phony Phone" is a store placeholder string ("iQOO Neo 7 Phony Phone"), not
+    # part of any model name.
+    t = re.sub(r"\bphony\s*phone\b", " ", t, flags=re.I)
     t = re.sub(r"\b(accessories|charger|cable|earphone|adapter)\b", " ", t, flags=re.I)
     # Model number noise (e.g. "SM-G991B", "CPH2197")
     t = re.sub(r"\b[A-Z]{2,4}-?[A-Z0-9]{4,}\b", " ", t)

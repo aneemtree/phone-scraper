@@ -47,6 +47,28 @@ COLORS = [
     # never itself a phone model line, so stripping it lets the base model match.
     "submarine", "lightning", "stealth", "glacial", "onyx", "mirror", "haze",
     "royal", "artistic", "berry", "desert", "steel", "matrix",
+    # Beebom-derived (2026-06-29): auto-extracted from every phone's Beebom
+    # "Colors" spec, MINUS any word that is also a token of a real model name
+    # (so galaxy/poco/magic/aqua/velvet/power/turbo/edge/star/etc are excluded
+    # by construction). Verified against all ~1800 catalog models: stripping
+    # these only shortens colour-leak names, never a real model. Future-risky
+    # performance words (legend/meta/racing/sonic/nitro/turbo) deliberately left
+    # out. Regenerate by re-running the Beebom-colours-minus-model-tokens query.
+    "pantone", "cosmic", "shadow", "ocean", "aurora", "moonlight", "moonlit",
+    "carbon", "sunrise", "arctic", "starlight", "starlit", "nebula", "jade",
+    "jadeite", "charcoal", "crystal", "pacific", "marble", "frost", "cyan",
+    "astral", "olive", "twilight", "cyber", "dusk", "beige", "aura", "dawn",
+    "bronze", "champagne", "interstellar", "peach", "titan", "amber", "stellar",
+    "misty", "cobalt", "feather", "laser", "eclipse", "moonstone", "electric",
+    "oasis", "neptune", "ultramarine", "magenta", "storm", "monet", "polar",
+    "iris", "coralred", "luxe", "peacock", "pastel", "flame", "teal",
+    "navigator", "mirage", "mocha", "maroon", "iceberg", "jazz", "himalayan",
+    "ganges", "galactic", "noble", "orchid", "aquamarine", "cosmos", "pinkgold",
+    "copper", "comet", "ruby", "scarlet", "breeze", "bora", "stargaze",
+    "thunder", "asteroid", "turquoise", "ivy", "icesense", "chrome",
+    "meteorite", "lotus", "vanilla", "chromatic", "caneel", "camo", "volcanic",
+    "slate", "blueblack", "blazing", "waterfall", "mars", "marine", "atlantic",
+    "noir", "opal", "dune", "mystique", "watery", "morandi", "andaman",
     # Marketing colour QUALIFIERS left after the base colour is stripped:
     # Samsung F62 "Laser Grey/Green" -> "Laser"; Pixel 9a "Iris"; Samsung M52
     # "Icy Blue" -> "Icy"/"Ice". None are real model names, so safe to strip.

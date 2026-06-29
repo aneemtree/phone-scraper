@@ -105,6 +105,26 @@ COLORS = [
     "brilliant", "brushed", "raven", "dawnlight", "ultramarine",
 ]
 
+# AUTO-GROWN colour vocabulary (in addition to the static COLORS above). It's
+# EMPTY by default — at scrape time there's no DB, so only the static COLORS run.
+# normalize_db.build_color_vocab() derives it from every phone's Beebom "Colors"
+# spec MINUS every real model-name token (so model words like galaxy/poco/magic/
+# aqua/velvet/power/turbo are excluded by construction) and registers it here via
+# set_dynamic_colors() before Pass 1. So as new models get Beebom specs, their
+# colours auto-enter the strip set on the next normalize_db run — no list edits.
+# The subtraction is recomputed each run, so it also self-corrects: if a colour
+# word later becomes a real model token, it drops out automatically.
+_DYNAMIC_COLORS = []
+
+
+def set_dynamic_colors(words):
+    """Register the auto-grown colour vocab (single words). Longest-first so a
+    multi-word colour is removed before any subword (matches the COLORS order)."""
+    global _DYNAMIC_COLORS
+    seen = {w.strip().lower() for w in (words or []) if w and len(w.strip()) >= 3}
+    _DYNAMIC_COLORS = sorted(seen, key=len, reverse=True)
+
+
 # Roman numerals (II-XII) that title-casing would lower-case (e.g. Sony "Xperia 1
 # III" -> "Iii"); uppercased back in clean_model. Single "I" is excluded (too
 # ambiguous); "V"/"X" are included for Xperia "1 V"/iPhone "X".
@@ -434,6 +454,8 @@ def clean_model(title: str) -> str:
     t = re.sub(r"\bram\b", " ", t, flags=re.I)
     t = re.sub(r"\bsim\s*slot\b", " ", t, flags=re.I)    # "iPhone 15 Pro Sim Slot" leak
     for c in COLORS:                                     # colors (longest first)
+        t = re.sub(rf"\b{re.escape(c)}\b", " ", t, flags=re.I)
+    for c in _DYNAMIC_COLORS:                            # auto-grown colour vocab
         t = re.sub(rf"\b{re.escape(c)}\b", " ", t, flags=re.I)
     t = re.sub(r"\s*,\s*", " ", t)                       # drop orphaned commas
     t = re.sub(r"\b(refurbished|refubished|renewed|pre-?owned|pre-?loved|used|open\s*box|certified|certified refurbished)\b", " ", t, flags=re.I)

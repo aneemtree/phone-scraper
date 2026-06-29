@@ -41,6 +41,12 @@ COLORS = [
     # Triage leaks (colour qualifiers stores append to the model name, blocking
     # the GSMArena match + cross-store merge). Multi-word first.
     "deep ocean", "marshmallow", "atlantis", "sapphire", "stardust", "glacier", "cross",
+    # 2026-06-29 triage: trailing colour/edition qualifiers leaking into model
+    # names (POCO F1 "Steel" Blue, POCO X2 "Matrix" Purple, Realme 6 Pro
+    # "Lightning", Redmi Note 13 "Stealth", etc). Each is a colour word that is
+    # never itself a phone model line, so stripping it lets the base model match.
+    "submarine", "lightning", "stealth", "glacial", "onyx", "mirror", "haze",
+    "royal", "artistic", "berry", "desert", "steel", "matrix",
     # Marketing colour QUALIFIERS left after the base colour is stripped:
     # Samsung F62 "Laser Grey/Green" -> "Laser"; Pixel 9a "Iris"; Samsung M52
     # "Icy Blue" -> "Icy"/"Ice". None are real model names, so safe to strip.

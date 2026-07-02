@@ -69,6 +69,7 @@ COLORS = [
     "meteorite", "lotus", "vanilla", "chromatic", "caneel", "camo", "volcanic",
     "slate", "blueblack", "blazing", "waterfall", "mars", "marine", "atlantic",
     "noir", "opal", "dune", "mystique", "watery", "morandi", "andaman",
+    "supernova",  # POCO X5 "Supernova" colour leak (triage 2026-07)
     # Marketing colour QUALIFIERS left after the base colour is stripped:
     # Samsung F62 "Laser Grey/Green" -> "Laser"; Pixel 9a "Iris"; Samsung M52
     # "Icy Blue" -> "Icy"/"Ice". None are real model names, so safe to strip.
@@ -237,6 +238,11 @@ NON_PHONE_KEYWORDS = [
     "smartwatch", "smart watch", "watch",
     "tablet", "ipad",
     "laptop", "notebook",
+    # Laptops leaking in from all-brands WooCommerce stores (e.g. Dell Latitude,
+    # ThinkPad). "inch" is a laptop/monitor screen-size signal that never appears
+    # in a phone MODEL name (phones are keyed by storage, not diagonal).
+    "dell", "latitude", "thinkpad", "macbook", "inspiron", "vostro",
+    "elitebook", "probook", "chromebook", "inch",
     "earphone", "earbuds", "headphone", "airpods",
     "charger", "cable", "adapter", "hub",
     "case", "cover", "screen guard", "tempered glass",

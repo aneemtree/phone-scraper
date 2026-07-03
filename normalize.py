@@ -41,6 +41,35 @@ COLORS = [
     # Triage leaks (colour qualifiers stores append to the model name, blocking
     # the GSMArena match + cross-store merge). Multi-word first.
     "deep ocean", "marshmallow", "atlantis", "sapphire", "stardust", "glacier", "cross",
+    # 2026-06-29 triage: trailing colour/edition qualifiers leaking into model
+    # names (POCO F1 "Steel" Blue, POCO X2 "Matrix" Purple, Realme 6 Pro
+    # "Lightning", Redmi Note 13 "Stealth", etc). Each is a colour word that is
+    # never itself a phone model line, so stripping it lets the base model match.
+    "submarine", "lightning", "stealth", "glacial", "onyx", "mirror", "haze",
+    "royal", "artistic", "berry", "desert", "steel", "matrix",
+    # Beebom-derived (2026-06-29): auto-extracted from every phone's Beebom
+    # "Colors" spec, MINUS any word that is also a token of a real model name
+    # (so galaxy/poco/magic/aqua/velvet/power/turbo/edge/star/etc are excluded
+    # by construction). Verified against all ~1800 catalog models: stripping
+    # these only shortens colour-leak names, never a real model. Future-risky
+    # performance words (legend/meta/racing/sonic/nitro/turbo) deliberately left
+    # out. Regenerate by re-running the Beebom-colours-minus-model-tokens query.
+    "pantone", "cosmic", "shadow", "ocean", "aurora", "moonlight", "moonlit",
+    "carbon", "sunrise", "arctic", "starlight", "starlit", "nebula", "jade",
+    "jadeite", "charcoal", "crystal", "pacific", "marble", "frost", "cyan",
+    "astral", "olive", "twilight", "cyber", "dusk", "beige", "aura", "dawn",
+    "bronze", "champagne", "interstellar", "peach", "titan", "amber", "stellar",
+    "misty", "cobalt", "feather", "laser", "eclipse", "moonstone", "electric",
+    "oasis", "neptune", "ultramarine", "magenta", "storm", "monet", "polar",
+    "iris", "coralred", "luxe", "peacock", "pastel", "flame", "teal",
+    "navigator", "mirage", "mocha", "maroon", "iceberg", "jazz", "himalayan",
+    "ganges", "galactic", "noble", "orchid", "aquamarine", "cosmos", "pinkgold",
+    "copper", "comet", "ruby", "scarlet", "breeze", "bora", "stargaze",
+    "thunder", "asteroid", "turquoise", "ivy", "icesense", "chrome",
+    "meteorite", "lotus", "vanilla", "chromatic", "caneel", "camo", "volcanic",
+    "slate", "blueblack", "blazing", "waterfall", "mars", "marine", "atlantic",
+    "noir", "opal", "dune", "mystique", "watery", "morandi", "andaman",
+    "supernova",  # POCO X5 "Supernova" colour leak (triage 2026-07)
     # Marketing colour QUALIFIERS left after the base colour is stripped:
     # Samsung F62 "Laser Grey/Green" -> "Laser"; Pixel 9a "Iris"; Samsung M52
     # "Icy Blue" -> "Icy"/"Ice". None are real model names, so safe to strip.
@@ -76,6 +105,26 @@ COLORS = [
     "copper", "caviar", "noir", "artic", "jazz", "ganges", "thunder",
     "brilliant", "brushed", "raven", "dawnlight", "ultramarine",
 ]
+
+# AUTO-GROWN colour vocabulary (in addition to the static COLORS above). It's
+# EMPTY by default — at scrape time there's no DB, so only the static COLORS run.
+# normalize_db.build_color_vocab() derives it from every phone's Beebom "Colors"
+# spec MINUS every real model-name token (so model words like galaxy/poco/magic/
+# aqua/velvet/power/turbo are excluded by construction) and registers it here via
+# set_dynamic_colors() before Pass 1. So as new models get Beebom specs, their
+# colours auto-enter the strip set on the next normalize_db run — no list edits.
+# The subtraction is recomputed each run, so it also self-corrects: if a colour
+# word later becomes a real model token, it drops out automatically.
+_DYNAMIC_COLORS = []
+
+
+def set_dynamic_colors(words):
+    """Register the auto-grown colour vocab (single words). Longest-first so a
+    multi-word colour is removed before any subword (matches the COLORS order)."""
+    global _DYNAMIC_COLORS
+    seen = {w.strip().lower() for w in (words or []) if w and len(w.strip()) >= 3}
+    _DYNAMIC_COLORS = sorted(seen, key=len, reverse=True)
+
 
 # Roman numerals (II-XII) that title-casing would lower-case (e.g. Sony "Xperia 1
 # III" -> "Iii"); uppercased back in clean_model. Single "I" is excluded (too
@@ -189,6 +238,11 @@ NON_PHONE_KEYWORDS = [
     "smartwatch", "smart watch", "watch",
     "tablet", "ipad",
     "laptop", "notebook",
+    # Laptops leaking in from all-brands WooCommerce stores (e.g. Dell Latitude,
+    # ThinkPad). "inch" is a laptop/monitor screen-size signal that never appears
+    # in a phone MODEL name (phones are keyed by storage, not diagonal).
+    "dell", "latitude", "thinkpad", "macbook", "inspiron", "vostro",
+    "elitebook", "probook", "chromebook", "inch",
     "earphone", "earbuds", "headphone", "airpods",
     "charger", "cable", "adapter", "hub",
     "case", "cover", "screen guard", "tempered glass",
@@ -406,6 +460,8 @@ def clean_model(title: str) -> str:
     t = re.sub(r"\bram\b", " ", t, flags=re.I)
     t = re.sub(r"\bsim\s*slot\b", " ", t, flags=re.I)    # "iPhone 15 Pro Sim Slot" leak
     for c in COLORS:                                     # colors (longest first)
+        t = re.sub(rf"\b{re.escape(c)}\b", " ", t, flags=re.I)
+    for c in _DYNAMIC_COLORS:                            # auto-grown colour vocab
         t = re.sub(rf"\b{re.escape(c)}\b", " ", t, flags=re.I)
     t = re.sub(r"\s*,\s*", " ", t)                       # drop orphaned commas
     t = re.sub(r"\b(refurbished|refubished|renewed|pre-?owned|pre-?loved|used|open\s*box|certified|certified refurbished)\b", " ", t, flags=re.I)

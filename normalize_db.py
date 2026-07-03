@@ -18,10 +18,11 @@ and the offers view still reads coalesce(canonical_key, variant_key).
 Run AFTER all scrapers complete.  Usage: python3 normalize_db.py
 """
 import os
+import re
 from dotenv import load_dotenv
 from supabase import create_client
 
-from normalize import clean_model, make_variant_key, is_phone
+from normalize import clean_model, make_variant_key, is_phone, set_dynamic_colors
 from obs import init_sentry, log_error
 
 load_dotenv()
@@ -45,6 +46,64 @@ def fetch_phones():
             break
         start += 1000
     return rows
+
+
+# Words that read like performance/edition MODEL lines, not colours — kept out
+# of the auto vocab even though they appear in some "Colors" strings, so a future
+# model named after one isn't shortened before it lands in the DB.
+_COLOR_DENY = {
+    "legend", "meta", "racing", "sonic", "supersonic", "nitro", "viva",
+    "phoenix", "maverick", "turbo", "speed", "power", "prime", "edition",
+    "product", "gradient", "gradation", "and", "the", "with",
+}
+
+
+def build_color_vocab(phones):
+    """Auto-grow the colour strip vocab from data we already have.
+
+    Every phone's Beebom 'Colors' spec lists its colour names; collect the
+    distinct colour WORDS across all specs, then SUBTRACT every token that is
+    also part of a real model name (brand/series/model). What remains is a word
+    that is a colour and never a model line, so stripping it from a model name
+    can only fix a colour leak — never shorten a real model. Registered into
+    normalize via set_dynamic_colors() so Pass 1 strips them. As new models get
+    Beebom specs, their colours auto-enter this set on the next run.
+    """
+    # Protect: any token that appears in a real model name.
+    mtokens = set()
+    for p in phones:
+        for tok in re.split(r"\s+", (p.get("model") or "").lower()):
+            if tok:
+                mtokens.add(tok)
+
+    # Colour words from every Beebom specs row (paginate past the 1000-row cap).
+    cwords, start = set(), 0
+    while True:
+        chunk = (sb.table("specs").select("specs")
+                 .order("variant_key").range(start, start + 999).execute().data) or []
+        for row in chunk:
+            spec = row.get("specs")
+            if not isinstance(spec, dict):
+                continue
+            for grp in spec.get("_groups") or []:
+                if (grp.get("title") or "").strip().lower() != "general":
+                    continue
+                for label, val in (grp.get("rows") or []):
+                    if str(label).strip().lower() not in ("colors", "colours"):
+                        continue
+                    for w in re.split(r"[,/&]|\s+", str(val).lower()):
+                        w = w.strip()
+                        if len(w) >= 3 and not any(c.isdigit() for c in w):
+                            cwords.add(w)
+        if len(chunk) < 1000:
+            break
+        start += 1000
+
+    vocab = {w for w in cwords if w not in mtokens and w not in _COLOR_DENY}
+    set_dynamic_colors(vocab)
+    print(f"Auto colour vocab: {len(cwords)} colour words, "
+          f"{len(vocab)} kept after removing model tokens + deny-list.")
+    return vocab
 
 
 def pass0_delete_nonphones(phones):
@@ -170,6 +229,15 @@ def normalize():
     if deleted:
         phones = fetch_phones()
         print(f"Phones remaining after cleanup: {len(phones)}")
+
+    # Auto-grow the colour strip vocab from Beebom specs (minus model tokens)
+    # BEFORE Pass 1 so the re-clean uses it. Best-effort: a failure here must not
+    # break normalization (static COLORS still applies).
+    try:
+        build_color_vocab(phones)
+    except Exception as e:
+        log_error(e, component="normalize_db", phase="build_color_vocab")
+        print(f"build_color_vocab failed ({e}); continuing with static COLORS only.")
 
     pass1_renormalize(phones)
     # Re-fetch so Pass 2 dedups on the freshly-recomputed variant_keys.

@@ -171,6 +171,25 @@ COLORS also strips marketing colour QUALIFIERS that leak after the base colour
 is removed (e.g. Samsung F62 "Laser Grey/Green"→"Laser", Pixel 9a "Iris",
 Samsung M52 "Icy Blue"→"Icy"/"Ice"). When triage surfaces an unmatched phone
 whose tail is a colour word, add it to COLORS (it's never a real model name).
+AUTO-GROWING COLOUR VOCAB (IMPORTANT): colour-leak fixing is now mostly
+self-maintaining — you rarely hand-edit COLORS. normalize.py has a DYNAMIC set
+(`_DYNAMIC_COLORS` + `set_dynamic_colors()`) stripped by clean_model alongside
+static COLORS; it's EMPTY at scrape time (no DB) so static COLORS still runs
+there. normalize_db.build_color_vocab() (before Pass 1) derives it from every
+phone's Beebom "Colors" spec MINUS every real model-name token (so model words
+like galaxy/poco/magic/aqua/velvet/power/turbo/star/alpha/edge are excluded by
+construction) minus a small deny-list of perf/edition words (legend/meta/racing/
+sonic/nitro/turbo). So a NEW model's colours auto-enter the strip set on the next
+normalize_db run — no list edits — and the subtraction is recomputed each run, so
+a colour word that later becomes a real model token drops out automatically.
+Best-effort (a failure falls back to static COLORS). Validated: registering the
+derived vocab and re-cleaning all ~1800 catalog models changed 0 real models. A
+curated static Beebom colour block was also baked into COLORS as a scrape-time
+baseline.
+NON-PHONE LAPTOPS: NON_PHONE_KEYWORDS gained laptop signals (dell, latitude,
+thinkpad, macbook, inspiron, vostro, elitebook, probook, chromebook, "inch") so
+is_phone() drops laptops leaking in from all-brands WooCommerce stores (Dell
+Latitude etc); "inch" is a screen-size signal that never appears in a phone model.
 Brand casing: iPhone, iPad, OnePlus, POCO, iQOO are normalized.
 A trailing "+" is converted to the word "Plus" (Realme 12+ → Realme 12 Plus) so
 make_variant_key (which strips non-alphanumerics) keeps it distinct from the

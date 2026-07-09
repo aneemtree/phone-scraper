@@ -192,6 +192,22 @@ def _record_run(site, seen, total, complete):
         pass
 
 
+def refresh_latest_prices():
+    """Refresh the latest_prices_mat materialized view (the snapshot the `offers`
+    view joins instead of re-deriving DISTINCT ON over the whole `prices` history
+    on every web request — see latest_prices_matview.sql). Call ONCE at the end of
+    the pipeline (normalize_db), after all price writes and before notify.py reads
+    offers. Best-effort: never break a run if the function/matview isn't applied
+    yet (pre-migration) or the call blips — offers still works off the plain view
+    until then. Routes through the refresh_latest_prices() SQL function because
+    supabase-py has no raw-SQL path (rpc only)."""
+    try:
+        _exec(lambda: supabase.rpc("refresh_latest_prices").execute())
+        print("Refreshed latest_prices_mat")
+    except Exception as e:
+        print(f"refresh_latest_prices skipped (non-fatal): {e}")
+
+
 def mark_unseen_out_of_stock(site, run_started_at, min_seen_ratio=0.5, run_complete=None):
     """Flag this site's phones that were NOT seen during the run as out of stock.
 

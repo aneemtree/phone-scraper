@@ -242,6 +242,32 @@ Every scraper:
 A guard (min_seen_ratio) skips the sweep if a partial/crashed run saw too few
 phones, so it can't wipe a store. The offers view exposes `in_stock`/`last_seen_at`.
 
+### Web read performance: latest_prices_mat (IMPORTANT)
+The web reads the `offers` view on every /phone/[variant] (and listing) render.
+`offers` used to join the PLAIN `latest_prices` view, which re-derives the latest
+price per (phone, condition) by `DISTINCT ON` over the WHOLE append-only `prices`
+history (200k+ rows and growing) on every single request (~600ms+ warm, worse
+cold). Under load that crossed the web anon role's statement_timeout -> PostgREST
+cancelled the query -> the RSC render threw -> Vercel 500s on /phone/[variant]
+(incident 2026-07-07). It worsened monotonically as `prices` grew.
+FIX (`latest_prices_matview.sql`): `latest_prices_mat` is a MATERIALIZED VIEW
+snapshot (one row per phone×condition, ~14.6k rows, unique index on
+(phone_id, condition) so it can REFRESH ... CONCURRENTLY). `offers` now joins the
+matview (few-ms lookup) instead of re-scanning history. `offers` still joins the
+LIVE `phones` table for model/storage/ram/in_stock/url, so admin edits (phones.ram
+via /admin/ram, images) reflect immediately — only the price/condition/rating/
+warranty columns are as-of-refresh, and those change ONLY on a scrape. The matview
+is refreshed by `refresh_latest_prices()` (a SQL function; supabase-py has no raw
+SQL path) at the END of the pipeline in normalize_db.py (after all price writes,
+before notify.py reads offers). Both call sites are best-effort (pre-migration
+DBs skip it; offers still works off the plain view until applied). db.py also
+exposes `refresh_latest_prices()` for any other caller. Apply order on a fresh DB:
+after `prices`/`latest_prices` exist, run `latest_prices_matview.sql`, THEN
+`specs_schema.sql` (its `offers` references latest_prices_mat). The plain
+`latest_prices` view is UNCHANGED (the matview is defined AS `select * from
+latest_prices`, so the dedup logic lives in one place). Web side also raised the
+anon/authenticated statement_timeout 3s->8s as the immediate mitigation.
+
 ### Variant deep-links
 Save the per-variant URL, not the bare product URL, so "Visit store" lands on the
 exact offer: Ovantica/Cashify use the variant id in the path (`…/<slug>/<id>`),

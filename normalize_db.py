@@ -242,6 +242,19 @@ def normalize():
     pass1_renormalize(phones)
     # Re-fetch so Pass 2 dedups on the freshly-recomputed variant_keys.
     pass2_delete_stale_orphans(fetch_phones())
+
+    # Refresh the latest_prices_mat snapshot the `offers` view reads (so the web
+    # doesn't re-derive it over the whole prices history per request — the
+    # /phone/[variant] 500 fix, latest_prices_matview.sql). Runs here because
+    # normalize_db is the last pipeline step before notify.py reads offers.
+    # Best-effort: pre-migration DBs (no function yet) just skip it.
+    try:
+        sb.rpc("refresh_latest_prices").execute()
+        print("Refreshed latest_prices_mat")
+    except Exception as e:
+        log_error(e, component="normalize_db", phase="refresh_latest_prices")
+        print(f"refresh_latest_prices skipped (non-fatal): {e}")
+
     print("\n✓ Normalization complete.")
 
 

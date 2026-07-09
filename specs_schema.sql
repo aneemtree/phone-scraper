@@ -50,10 +50,14 @@ create index if not exists specs_status_idx on specs (status);
 create index if not exists specs_model_lower_idx on specs (lower(model));
 
 -- ---------------------------------------------------------------------------
--- NOTE: offers reads lp.warranty_days + lp.warranty_label from latest_prices
--- (warranty is stored in DAYS; see the add_warranty_label / warranty_days_canonical
--- migrations). latest_prices is maintained in-DB, not here; it must expose
--- warranty_days + warranty_label for this view to build.
+-- NOTE: offers reads lp.* from latest_prices_mat (a MATERIALIZED snapshot of the
+-- plain latest_prices view — see latest_prices_matview.sql; apply that FIRST).
+-- It exists so offers doesn't re-derive DISTINCT ON over the whole append-only
+-- `prices` history on every web request (that caused statement-timeout 500s on
+-- /phone/[variant], 2026-07-07). The scraper refreshes it at the end of the
+-- pipeline via refresh_latest_prices(). lp must expose warranty_days +
+-- warranty_label (stored in DAYS; see add_warranty_label / warranty_days_canonical).
+-- latest_prices / latest_prices_mat are maintained in-DB, not here.
 -- offers view: specs and the canonical image are per-MODEL, so every storage
 -- variant of a phone shares one spec sheet/image. The lateral picks the best
 -- specs row for the model (prefer one with specs, then with an image).
@@ -71,7 +75,7 @@ create view offers as
     sp.specs                as specs,
     sp.gsm_url              as gsm_url
    from phones ph
-     join latest_prices lp on lp.phone_id = ph.id
+     join latest_prices_mat lp on lp.phone_id = ph.id
      left join stores s on s.site = ph.site
      left join lateral (
        select image_url, image_fallback, specs, gsm_url

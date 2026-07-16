@@ -268,6 +268,29 @@ after `prices`/`latest_prices` exist, run `latest_prices_matview.sql`, THEN
 latest_prices`, so the dedup logic lives in one place). Web side also raised the
 anon/authenticated statement_timeout 3s->8s as the immediate mitigation.
 
+### Web read: all_offers_json / specs_by_model_json (IMPORTANT — OOM 2026-07-16)
+`web_read_functions.sql` holds two SECURITY DEFINER read RPCs the web calls to
+fetch the whole catalog WITHOUT OOM-ing Postgres. History: the web builds every
+page from the `offers` view (~12-15k rows); it used to page through it in
+1000-row selects (~15 requests, each re-running the full join). Those were
+replaced by ONE `all_offers_json()` RPC (whole set as a single jsonb, bypassing
+PostgREST's 1000-row cap). BUT the `offers` view's LEFT JOIN LATERAL duplicates
+the large per-model `specs` JSONB onto EVERY one of a model's ~6 offer rows, so
+aggregating specs into one jsonb built a ~60MB blob in DB memory per call. On an
+undersized compute add-on that drove Postgres into an OOM CRASH-LOOP (repeated
+"database system was not properly shut down; automatic recovery in progress" ->
+FATAL "not accepting connections" -> Cloudflare 521 / 503 PGRST002). The Supabase
+management API still reported ACTIVE_HEALTHY — the truth was in `get_logs`
+(service=postgres). FIX: (A) product owner bumped the compute add-on (more RAM);
+(B) DECOUPLE specs from offers — `all_offers_json()` now emits `to_jsonb(o) -
+'specs' - 'gsm_url'` (~10MB, no specs), and `specs_by_model_json()` returns specs
+ONCE per model (~2.1k rows, ~5.5MB, keyed by lower(model), same best-row pick as
+the offers lateral). The web (lib/queries.js buildVariantCards) joins specs onto
+each card by lower(model); image_url stays resolved on the offer row. Payload
+60MB -> ~16MB, no memory spike. Apply AFTER specs_schema.sql. LESSON: never
+aggregate a per-model blob across per-offer rows — the fan-out multiplies memory;
+keep per-model data in its own per-model fetch.
+
 ### Variant deep-links
 Save the per-variant URL, not the bare product URL, so "Visit store" lands on the
 exact offer: Ovantica/Cashify use the variant id in the path (`…/<slug>/<id>`),

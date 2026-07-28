@@ -171,6 +171,11 @@ COLORS also strips marketing colour QUALIFIERS that leak after the base colour
 is removed (e.g. Samsung F62 "Laser Grey/Green"→"Laser", Pixel 9a "Iris",
 Samsung M52 "Icy Blue"→"Icy"/"Ice"). When triage surfaces an unmatched phone
 whose tail is a colour word, add it to COLORS (it's never a real model name).
+BUT VALIDATE FIRST — re-run clean_model over every catalog model and confirm the
+new word only shortens the leak variant, never an integral token of a real model.
+Counter-examples that must NOT be added: "sky" (real "Tecno Camon iSky 2"), "cool"
+(real "Coolpad Cool 1/3/6"). 2026-07-27 triage added mercurial/infinite/violet/
+glaze/metallic/dark (validated, 0 real models changed).
 AUTO-GROWING COLOUR VOCAB (IMPORTANT): colour-leak fixing is now mostly
 self-maintaining — you rarely hand-edit COLORS. normalize.py has a DYNAMIC set
 (`_DYNAMIC_COLORS` + `set_dynamic_colors()`) stripped by clean_model alongside

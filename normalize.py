@@ -47,6 +47,14 @@ COLORS = [
     # never itself a phone model line, so stripping it lets the base model match.
     "submarine", "lightning", "stealth", "glacial", "onyx", "mirror", "haze",
     "royal", "artistic", "berry", "desert", "steel", "matrix",
+    # 2026-07-27 triage: trailing colour/edition qualifiers on in-stock cards that
+    # blocked the GSMArena/Beebom match (so the phone had no image) and the cross-
+    # store merge. Validated against all 1619 catalog models — each of these appears
+    # ONLY as a trailing qualifier on the leak variant, never as a real model token
+    # (unlike "sky" [Tecno Camon iSky] or "cool" [Coolpad Cool], which are NOT added).
+    # OnePlus Nord 4 "Mercurial", Realme 8 Pro "Infinite", Samsung S21 "Violet",
+    # Vivo X50 "Glaze", Redmi Note 10T "Metallic", Realme C31 "Dark".
+    "mercurial", "infinite", "violet", "glaze", "metallic", "dark",
     # Beebom-derived (2026-06-29): auto-extracted from every phone's Beebom
     # "Colors" spec, MINUS any word that is also a token of a real model name
     # (so galaxy/poco/magic/aqua/velvet/power/turbo/edge/star/etc are excluded

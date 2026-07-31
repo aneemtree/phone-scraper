@@ -455,9 +455,12 @@ NEW store: upload the logo to the `logos` bucket, set logo_url, then run
 frontend serves them untransformed (Cloudflare's resizer skips vector).
 
 ### Scrapers & pipeline
-Active scrapers: cashify, controlz, refit, xtracover, ovantica, mobilegoo,
+Active scrapers: cashify, controlz, refit, xtracover, ovantica,
 sahivalue, oldsold, thephonehub, easyphones, tetro, grest, cellbuddy, budli,
-itradeit, gadgetrebirth, maplestore, samsungcr, gudfast. ControlZ filters non-phones by the actual
+itradeit, gadgetrebirth, maplestore, samsungcr, gudfast. (mobilegoo REMOVED
+2026-07 — the store shut down: mobilegoo.shop serves a Shopify password page and
+products.json returns 401. mobilegoo.py is kept in the repo but dropped from all
+workflows.) ControlZ filters non-phones by the actual
 product TITLE via is_phone() (a slug-only check missed accessories like power
 banks); thephonehub filters on the CLEAN model, not the slug, because its slugs
 embed marketing words (e.g. "50mp-ois-camera") that collide with is_phone().
@@ -639,35 +642,24 @@ brand warranty), store-specific.
     Prices: variation display_price is rupees; Store API prices.price is minor
     units (÷100). Deep-link via ?attribute_pa_storage/_grade/_color.
   - xtracover: one Playwright session to scroll the listing; no product pages.
-  - controlz: NO usable product API (client calls are analytics; the RSC
-    variant data is server-rendered with incomplete `$`-references — storage is
-    missing, units only partially inlined; JSON-LD/variants[] list DRAFT + hidden
-    units that don't match the rendered/buyable set). So it stays DOM-based
-    (Playwright), one isolated browser per product via ThreadPoolExecutor
-    (WORKERS). ControlZ renders ONE of TWO variant UIs per CATEGORY depending on
-    stock, and scrape_product() handles both, clicking ONLY the category (clicking
-    storages/colours destabilises the page — it freezes the price or silently
-    flips the category, which produced phantom mislabeled rows):
-      (A) a per-unit TABLE (Battery / Issues / Storage / Colour / Price) when the
-          category is sold as individual graded units (often Saver Series). It can
-          list MULTIPLE rows for the SAME storage at different prices (colour /
-          battery / issues) — parse_variant_table() reads the rows and the caller
-          keeps the MIN price per storage (the true available-unit list + lowest
-          price). This is the source of truth when present.
-      (B) a storage-button selector + a "Starting From" price (often Premium
-          renewed). "Starting From" is already the lowest colour price for the
-          selected storage; other storages' prices come from each button's signed
-          delta ("128GB- ₹3000", parse_delta()), restricted to the SELECTED
-          button's label-format group ("128GB" vs "128 GB") because ControlZ
-          renders a STALE DUPLICATE storage group for the OTHER category that must
-          be ignored. The selected option is marked by the Tailwind class
-          `outline-primary` (active_option() — it uses CSS `outline`, not border).
-    The h1 carries a suffix ("Apple iPhone 13 - Certified Refurbished | ControlZ")
-    stripped to the bare model before clean_model. db/obs are imported lazily
-    inside scrape()/__main__ so the pure-DOM helpers import without the DB stack.
-    Headless renders the hidden/stale storage buttons as not-visible inconsistently,
-    so visibility is NOT used as the signal — the table + the delta/format-group
-    logic are. Reviews scraped from the "4.7 · 21 REVIEWS" header. Not OOS-wired.
+  - controlz: SHOPIFY products.json, requests-only (MIGRATED 2026-07). ControlZ
+    moved off its old custom Next.js/RSC storefront onto Shopify, so the whole
+    Playwright DOM scraper was RETIRED. `www.controlz.world/store` now 301s to
+    `/collections/store`; the full catalog is the root `/products.json` (the
+    /collections/store subset misses ~a third). Options: Category (the GRADE:
+    "Premium Renewed"/"Saver Series") × Storage × Color, sometimes a SIM axis;
+    slot order varies so Storage is resolved by NAME (shopify_option_index) and the
+    grade by NAME (grade_position handles ControlZ's "Category" label, which the
+    shared helper's grade keywords don't). One row per (variant_key, condition) at
+    the LOWEST colour/SIM price; a product with NO Category axis falls back to
+    "Premium Renewed". Some Storage values BUNDLE RAM ("8GB/256GB") → split_ram_storage
+    picks storage=256GB, ram=8GB (like oldsold/itradeit; make_variant_key stays
+    storage-only, RAM folded into name + dedup key). Availability = per-variant
+    `available`. Warranty = store default (540d), not per-offer. Reviews are gone
+    (the old DOM "4.7 · 21 REVIEWS" header has no products.json equivalent) → null.
+    db/obs imported LAZILY so `python3 controlz.py --dry [--oos]` runs the parse
+    with only requests+normalize. Now OOS-capable (INCLUDE_OOS). Deep-link
+    ?variant=<id>. `--dry` validated against live data (20 in-stock offers).
 
 Workflows (GitHub Actions; repo is PUBLIC so Actions minutes are free/unlimited —
 that's why the cadences below are aggressive):
@@ -692,8 +684,10 @@ for SEO even when nothing is buyable. Default runs are available-only (flag off)
 Shared helpers in db.py: `INCLUDE_OOS` and `better_offer(availability, price, cur)`
 (in_stock beats out_of_stock; else lower price). Per scraper, phone-level in_stock
 is set true iff any of that phone's (site+name) offers is in stock; it self-heals
-when a regular run later finds it available. ControlZ (DOM) and Xtracover are NOT
-wired for OOS yet — no cheap sold-out source.
+when a regular run later finds it available. Xtracover is NOT wired for OOS yet
+(no cheap sold-out source). ControlZ IS OOS-capable since the Shopify migration
+(the products.json `available` flag), though it currently runs only in scrape.yml
+(not the OOS catalog pass).
 
 At catalog scale the per-row DB writes are huge, so db.py cycles the Supabase
 client onto a fresh connection every ~6000 write ops (`_note_op`) — Supabase's

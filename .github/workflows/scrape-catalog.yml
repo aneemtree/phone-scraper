@@ -52,9 +52,7 @@ jobs:
       - name: Ovantica (incl OOS)
         if: ${{ !cancelled() }}
         run: python ovantica.py
-      - name: Mobilegoo (incl OOS)
-        if: ${{ !cancelled() }}
-        run: python mobilegoo.py
+      # Mobilegoo removed 2026-07: store shut down (password page / 401).
       - name: Sahivalue (incl OOS)
         if: ${{ !cancelled() }}
         run: python sahivalue.py

@@ -85,12 +85,8 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python ovantica.py
 
-      - name: Run Mobilegoo scraper
-        if: ${{ !cancelled() }}
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: python mobilegoo.py
+      # Mobilegoo removed 2026-07: the store shut down (mobilegoo.shop now serves a
+      # Shopify password page; products.json returns 401). Nothing to scrape.
 
       - name: Run Sahivalue scraper
         if: ${{ !cancelled() }}

@@ -61,6 +61,11 @@ $$;
 
 grant execute on function refresh_latest_prices() to service_role;
 
+-- NOTE: refresh_latest_prices() is EXTENDED in variant_price_extremes_matview.sql
+-- to ALSO refresh variant_price_extremes_mat. Apply that file AFTER this one; if
+-- you re-apply THIS file afterwards it reverts the function to the single-refresh
+-- body above, so re-apply variant_price_extremes_matview.sql too.
+
 -- Repoint `offers` at the snapshot. Column list/order/types are IDENTICAL to the
 -- current view, so CREATE OR REPLACE is non-destructive (missing_images /
 -- ram_collisions, which don't depend on offers, are untouched).

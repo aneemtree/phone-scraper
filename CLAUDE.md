@@ -273,6 +273,27 @@ after `prices`/`latest_prices` exist, run `latest_prices_matview.sql`, THEN
 latest_prices`, so the dedup logic lives in one place). Web side also raised the
 anon/authenticated statement_timeout 3s->8s as the immediate mitigation.
 
+### Web read performance: variant_price_extremes_mat (IMPORTANT)
+Same treatment for the OTHER per-request full-history scan. The web's
+getVariantExtremes() calls the `variant_price_extremes()` RPC to attach `high`
+(all-time in-stock high) + `discountPct`/`dealScore` to every card — this drives
+the -X% badge, the DEFAULT best-deal ordering everywhere, and the Top Deals page.
+The RPC used to `max(price)/min(price)` over the WHOLE `prices` history grouped by
+variant on every ISR regen (the same class of scan latest_prices_mat removed from
+`offers`, and a contributor to the 2026-09 timeout storm). FIX
+(`variant_price_extremes_matview.sql`): `variant_price_extremes_mat` snapshots the
+extremes; the RPC now reads it (a ~800-row scan, ms). It is refreshed by the SAME
+`refresh_latest_prices()` the scraper already calls at pipeline end — that function
+was EXTENDED to refresh BOTH latest_prices_mat AND variant_price_extremes_mat, so
+NO scraper/workflow change was needed. IMPORTANT (Top Deals 1000-row cap): the RPC
+returns one row per variant; when it covered EVERY ever-in-stock variant (~1672) it
+blew PostgREST's hard max-rows=1000 cap, so ~672 lost their `high` -> discountPct=0
+-> Top Deals showed nothing. The snapshot is restricted to variants that CURRENTLY
+have an in-stock phone row (~800, < 1000); the high/low is still computed over full
+in-stock history for those, so discounts are unchanged for phones on the site.
+Apply AFTER latest_prices_matview.sql (it references latest_prices_mat + redefines
+refresh_latest_prices). Best-effort/idempotent like the other matview.
+
 ### Web read: all_offers_json / specs_by_model_json (IMPORTANT — OOM 2026-07-16)
 `web_read_functions.sql` holds two SECURITY DEFINER read RPCs the web calls to
 fetch the whole catalog WITHOUT OOM-ing Postgres. History: the web builds every

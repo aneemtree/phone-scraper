@@ -9,6 +9,12 @@ import httpx
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
+try:
+    from postgrest.exceptions import APIError  # supabase's REST error type
+except Exception:  # pragma: no cover - defensive if the module path changes
+    class APIError(Exception):  # fallback so isinstance checks never break
+        pass
+
 load_dotenv()
 
 
@@ -64,6 +70,29 @@ _TRANSIENT = (
     httpx.WriteError, httpx.PoolTimeout, httpx.ReadTimeout, httpx.ConnectTimeout,
 )
 
+# Cloudflare/gateway 5xx codes that mean "origin briefly unreachable", NOT a bad
+# query. Supabase sits behind Cloudflare, so a transient edge/origin blip comes
+# back as one of these — e.g. 525 "SSL handshake failed" or 520/522 — rendered as
+# an HTML error page that PostgREST surfaces as an APIError ("JSON could not be
+# generated"). PostgREST's own 503 PGRST002 ("could not connect to the database")
+# is the same class. All are safe to retry; a real query error (a Postgres
+# SQLSTATE like 42P01 / statement-timeout 57014, or a 4xx) is NOT and must fail fast.
+_GATEWAY_CODES = {"502", "503", "504", "520", "521", "522", "523", "524",
+                  "525", "526", "527", "530"}
+
+
+def _is_transient_apierror(e):
+    """True when an APIError is a transient gateway/origin blip (retry), not a
+    deterministic query error (fail fast)."""
+    code = str(getattr(e, "code", "") or "")
+    if code in _GATEWAY_CODES:
+        return True
+    blob = f"{getattr(e, 'message', '')} {getattr(e, 'details', '')}".lower()
+    return ("json could not be generated" in blob   # CF HTML page, not JSON
+            or "handshake failed" in blob
+            or "pgrst002" in blob                    # PostgREST: DB unreachable
+            or "<!doctype html" in blob)
+
 
 def _exec(build, tries=4):
     """Run a query-builder lambda, retrying transient connection drops on a new
@@ -76,6 +105,13 @@ def _exec(build, tries=4):
             return build()
         except _TRANSIENT:
             if attempt == tries - 1:
+                raise
+            supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+            _time.sleep(delay)
+            delay = min(delay * 2, 8)
+        except APIError as e:
+            # Only gateway/origin blips are retryable; genuine query errors raise.
+            if attempt == tries - 1 or not _is_transient_apierror(e):
                 raise
             supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
             _time.sleep(delay)

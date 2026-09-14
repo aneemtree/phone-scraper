@@ -735,9 +735,18 @@ GOAWAY, connect/read timeouts) on a freshly rebuilt client with backoff. Supabas
 will close a connection mid-request even well under the 20k-stream cap (idle /
 load-balancer recycle); without the retry a single drop crashed a scraper — and
 because the GitHub steps ran in sequence, the first crash skipped every later
-store. Each scraper step in scrape.yml/scrape-catalog.yml now also carries
-`if: ${{ !cancelled() }}` so one store's failure no longer skips the rest or the
-normalize pass (the job still reports failure for visibility).
+store. `_exec` ALSO retries a transient GATEWAY `postgrest.APIError` — Supabase is
+behind Cloudflare, so a brief edge/origin blip returns an HTML error page (525
+"SSL handshake failed", 520/522, or PostgREST's 503 PGRST002 "could not connect")
+that PostgREST surfaces as `APIError: JSON could not be generated`, NOT an httpx
+connection exception, so the old retry missed it and the first query crashed the
+whole run (this took the news blog down for two news.yml runs on 2026-09-13/14
+until the next cron self-recovered). `_is_transient_apierror()` retries only the
+gateway 5xx codes (502/503/504/520-530) + the CF-HTML/PGRST002 signatures; a real
+query error (a Postgres SQLSTATE like 42P01 / statement-timeout 57014, or a 4xx)
+still fails fast. Each scraper step in scrape.yml/scrape-catalog.yml now also
+carries `if: ${{ !cancelled() }}` so one store's failure no longer skips the rest
+or the normalize pass (the job still reports failure for visibility).
 
 Non-phones: the scraper-level is_phone() only blocks NEW inserts; accessories
 already saved before a filter existed persist (mark_unseen flips them OOS, they

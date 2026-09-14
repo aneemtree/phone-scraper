@@ -4,18 +4,21 @@ Budli scraper (buy.budli.in) — Shopify-based refurbished/pre-owned phone store
 Requests-only (Shopify products.json, no Playwright):
   /collections/mobile-phones/products.json?limit=250&page=N (paginate to empty)
 
-Unlike the other Shopify stores, Budli bakes model + storage + colour + CONDITION
-into the product TITLE, and ~90% of products are single-variant ("Default Title"):
-  "Apple iPhone 16 Plus (A3290) 5G 128GB Black (Good Condition)"
-So model/storage/condition are parsed from the title (clean_model strips the
-parens/colour/5G/storage); the trailing parenthetical carries the condition.
-
-Condition mapping (per store owner):
-  - "Good Condition"            -> "Good"
-  - "Refurbished"               -> "Unknown Condition" (the vague default)
-  - "Functional Issue"          -> product SKIPPED (defective; not listed)
-  - "Unboxed - Brand Warranty"  -> kept as-is
-  - no/other parenthetical      -> "Unknown Condition"
+Budli uses TWO condition conventions (matching its on-site "Condition guide":
+Unboxed / Good / Refurb / Usable / Preowned):
+  1. OLDER "refurbished" listings bake the grade into the TITLE parenthetical:
+       "Apple iPhone 16 Plus (A3290) 5G 128GB Black (Good Condition)"
+     -> "Good Condition" -> Good ; "Refurbished"/none -> Unknown Condition.
+  2. NEWER "Used …" listings carry NO grade parenthetical; the grade lives in the
+     product TAGS instead ("usable", "PreOwned"/"Pre Owned", "unboxed"):
+       "Used Realme 8i 64GB 4GB RAM Space Purple"  tags:[…, PreOwned, usable]  -> Usable
+     A product may carry both a category tag (PreOwned/Used) and a finer grade
+     tag (usable); the finer grade wins (the PDP shows "Usable"), so tags are
+     checked best->worst: Unboxed > Usable > Preowned.
+So condition = condition_from_product(title, tags): tag grade first (new
+listings), then the title parenthetical (older listings). "Functional Issue" in
+the title -> product SKIPPED (defective, not listed). "Refurbished" stays the
+vague default -> "Unknown Condition" (not comparable across stores).
 
 Storage: from a Storage/“Storgae” variant option when present (one row per
 storage), else parsed from the title — RAM ("8GB/12GB RAM") is removed first so
@@ -24,13 +27,15 @@ it isn't mistaken for storage, and the largest remaining GB/TB token wins.
 Price: Shopify products.json price is rupees. Availability: per-variant
 `available`. Deep-link: /products/<handle>?variant=<id>.
 
-Run with: python3 budli.py
+Run with: python3 budli.py   (add --dry for a no-DB validation, --oos to include
+sold-out variants in the dry run).
 """
 import re
+import os
+import sys
 import time
 import requests
 from normalize import clean_model, normalize_storage, make_variant_key, normalize_condition, is_phone, normalize_ram
-from db import save_phone, save_price, ensure_image, mark_site_oos, mark_unseen_out_of_stock, INCLUDE_OOS, better_offer, months_to_days, YEAR_DAYS
 from obs import init_sentry, log_error
 
 SITE = "budli"
@@ -41,17 +46,45 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 HEADERS = {"User-Agent": UA}
 
+# Warranty day conversion, inlined (not imported from db) so the parse
+# (build_offers / warranty_from_body) stays import-free for --dry.
+MONTH_DAYS = 30
+YEAR_DAYS = 365
 
-def condition_from_title(title):
-    """Return the condition label, or None to SKIP (Functional Issue)."""
-    for c in re.findall(r"\(([^)]*)\)", title):
-        cl = c.strip().lower()
+# Budli's on-site "Condition guide" grades that live in the product TAGS (newer
+# "Used …" listings). Ordered best -> worst; a product carrying several (e.g.
+# category "PreOwned" + grade "usable") takes the FINER grade, matching the PDP.
+TAG_GRADES = [
+    ("unboxed", "Unboxed"),
+    ("usable", "Usable"),
+    ("preowned", "Preowned"),
+    ("pre owned", "Preowned"),
+]
+
+
+def condition_from_product(title, tags):
+    """Return the condition label, or None to SKIP (Functional Issue).
+
+    Grade sources, in order:
+      1. TAG grade (newer "Used …" listings) — Unboxed / Usable / Preowned.
+      2. TITLE parenthetical (older listings) — Good / Unboxed / Refurbished.
+    "Functional Issue" anywhere in the title -> skip. Anything else / nothing
+    -> "Unknown Condition" (the vague "Refurbished" default)."""
+    parens = [c.strip().lower() for c in re.findall(r"\(([^)]*)\)", title or "")]
+    for cl in parens:
         if "functional issue" in cl or "functinal issue" in cl:
             return None  # defective — skip
+
+    tagset = {(t or "").strip().lower() for t in (tags or [])}
+    for tag, label in TAG_GRADES:
+        if tag in tagset:
+            return label
+
+    for cl in parens:
         if "good" in cl:
             return normalize_condition("Good")
         if "unboxed" in cl:
-            return "Unboxed - Brand Warranty"
+            return "Unboxed"
         if "refurbish" in cl:
             return normalize_condition("Refurbished")  # -> Unknown Condition
     return normalize_condition("Refurbished")  # no/other paren -> Unknown Condition
@@ -71,7 +104,7 @@ def warranty_from_body(body):
     m = re.search(r"(\d+)\s*(year|month)s?\b[^.<\n]{0,25}warrant", s)
     if m:
         n = int(m.group(1))
-        return (n * YEAR_DAYS if m.group(2) == "year" else months_to_days(n)), None
+        return (n * YEAR_DAYS if m.group(2) == "year" else n * MONTH_DAYS), None
     if "brand warranty" in s:
         return None, "Brand Warranty"
     if "no warranty" in s:
@@ -135,6 +168,19 @@ def get_image(product):
     return None
 
 
+def better_offer(new_availability, new_price, cur):
+    """Pure copy of db.better_offer (kept db-free so build_offers runs under
+    --dry): in_stock beats out_of_stock; within the same availability the lower
+    price wins. `cur` is the current offer dict or None."""
+    if cur is None:
+        return True
+    new_in = new_availability == "in_stock"
+    cur_in = cur.get("availability") == "in_stock"
+    if new_in != cur_in:
+        return new_in
+    return new_price < cur["price"]
+
+
 def fetch_all_products():
     """Paginate until an empty page."""
     products, page = [], 1
@@ -154,23 +200,17 @@ def fetch_all_products():
     return products
 
 
-def scrape():
-    from datetime import datetime, timezone
-    run_started_at = datetime.now(timezone.utc).isoformat()
-    mark_site_oos(SITE)
-    print("Fetching all products from Budli API...")
-    products = fetch_all_products()
-    print(f"\nTotal products: {len(products)}")
-
-    best = {}  # (variant_key, condition) -> lowest-price offer
-
+def build_offers(products, include_oos):
+    """Parse products -> {(variant_key, condition): lowest-price offer}. Pure
+    (no DB), so it drives both scrape() and the --dry validator."""
+    best = {}
     for prod in products:
         title = prod.get("title", "")
         model = clean_model(title)
         if not model or not is_phone(model, title):
             continue
 
-        condition = condition_from_title(title)
+        condition = condition_from_product(title, prod.get("tags"))
         if condition is None:
             continue  # Functional Issue — skip
 
@@ -185,12 +225,12 @@ def scrape():
         variants = prod.get("variants", [])
         if not variants:
             continue
-        if not INCLUDE_OOS and not any(v.get("available", False) for v in variants):
+        if not include_oos and not any(v.get("available", False) for v in variants):
             continue
 
         for v in variants:
             avail = bool(v.get("available", False))
-            if not avail and not INCLUDE_OOS:
+            if not avail and not include_oos:
                 continue
             price = float(v.get("price")) if v.get("price") else None
             if not price:
@@ -215,7 +255,20 @@ def scrape():
                     "warranty_label": warranty_label,
                     "name": f"{model} {storage}".strip(),
                 }
+    return best
 
+
+def scrape():
+    from datetime import datetime, timezone
+    from db import (save_phone, save_price, ensure_image, mark_site_oos,
+                    mark_unseen_out_of_stock, INCLUDE_OOS)
+    run_started_at = datetime.now(timezone.utc).isoformat()
+    mark_site_oos(SITE)
+    print("Fetching all products from Budli API...")
+    products = fetch_all_products()
+    print(f"\nTotal products: {len(products)}")
+
+    best = build_offers(products, INCLUDE_OOS)
     print(f"\nUnique (variant, condition) offers: {len(best)}")
 
     in_stock_names = {o["name"] for o in best.values() if o["availability"] == "in_stock"}
@@ -244,10 +297,32 @@ def scrape():
     print(f"\nDone. Saved {saved} offers from {SITE}.")
 
 
+def dry(include_oos):
+    """No-DB validation: fetch, parse, print the condition distribution + offers."""
+    from collections import Counter
+    print("Fetching all products from Budli API...")
+    products = fetch_all_products()
+    print(f"\nTotal products: {len(products)}")
+    best = build_offers(products, include_oos)
+    dist = Counter(o["condition"] for o in best.values())
+    print(f"\nUnique (variant, condition) offers: {len(best)}")
+    print("Condition distribution:")
+    for c, n in dist.most_common():
+        print(f"  {n:4}  {c}")
+    print()
+    for o in sorted(best.values(), key=lambda x: (x["model"], x["condition"])):
+        print(f"  {o['name']:40} [{o['condition']:18}] ₹{o['price']:.0f}  ram={o['ram']}  [{o['availability']}]")
+
+
 if __name__ == "__main__":
-    init_sentry(SITE)
-    try:
-        scrape()
-    except Exception as e:
-        log_error(e, site=SITE, phase="scrape")
-        raise
+    dry_run = "--dry" in sys.argv
+    include_oos = ("--oos" in sys.argv) or (os.environ.get("INCLUDE_OOS") == "1")
+    if dry_run:
+        dry(include_oos)
+    else:
+        init_sentry(SITE)
+        try:
+            scrape()
+        except Exception as e:
+            log_error(e, site=SITE, phase="scrape")
+            raise

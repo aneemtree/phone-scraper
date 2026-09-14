@@ -525,15 +525,26 @@ Per-site data source / speed:
     storage uses the Store API min price). Prices: variation display_price is rupees,
     Store API prices.price is minor units (÷100). Deep-link via ?attribute_pa_*.
   - budli: Shopify products.json (/collections/mobile-phones), requests-only,
-    all-brands. Unlike the other Shopify stores, Budli bakes model + storage +
-    colour + CONDITION into the product TITLE and ~90% of products are single-
-    variant ("Default Title"), so model/storage/condition are parsed from the
-    title. Condition is the trailing parenthetical: "Good Condition" → Good,
-    "Refurbished"/none → Unknown Condition, "Unboxed - Brand Warranty" kept as-is,
-    "Functional Issue" → product SKIPPED (defective, not listed). Storage from a
-    Storage/"Storgae"(typo) variant option when present, else the largest GB/TB
-    token in the title (RAM stripped first); one row per (storage, condition) at
-    the lowest color price. Prices are rupees; deep-link ?variant=<id>. NOTE: many
+    all-brands. Model + storage + colour are baked into the product TITLE and
+    ~90% of products are single-variant ("Default Title"). CONDITION comes from
+    condition_from_product(title, tags) — Budli's on-site "Condition guide" grades
+    (Unboxed / Good / Refurb / Usable / Preowned) reach the data TWO ways, so the
+    scraper checks BOTH: (1) newer "Used …" listings carry the grade in the TAGS
+    ("usable", "PreOwned"/"Pre Owned", "unboxed" — NO title parenthetical), and a
+    product with both a category tag (PreOwned) and a finer grade tag (usable)
+    takes the FINER grade (the PDP shows "Usable"), so tags are ranked best->worst
+    Unboxed > Usable > Preowned; (2) older listings bake the grade into the title
+    PARENTHETICAL — "Good Condition" → Good, "Unboxed" → Unboxed, "Refurbished"/
+    none → Unknown Condition. "Functional Issue" (title) → product SKIPPED
+    (defective). Tag grade wins over the title paren (disjoint in practice: new
+    listings have no paren, old ones have no grade tag). Per the product owner,
+    "Refurbished" stays "Unknown Condition" (not promoted to a grade). Storage
+    from a Storage/"Storgae"(typo) variant option when present, else the largest
+    GB/TB token in the title (RAM stripped first); one row per (variant_key,
+    condition) at the lowest color price. Prices are rupees; deep-link
+    ?variant=<id>. `python3 budli.py --dry [--oos]` validates the parse + prints
+    the condition distribution with NO DB (db imported lazily inside scrape()).
+    NOTE: many
     Budli titles leak colour qualifiers (Solar/Sierra/Forest/Awesome <c>/etc.) and
     a leading "Used" — these are stripped in clean_model() (see COLORS additions
     and the pre-owned/used noise pass); "Vivo iQOO …" → "iQOO …" so it shares the
@@ -642,7 +653,9 @@ ControlZ's Premium Renewed/Saver Series; Tetro is "Like New". The vague default
 label "Refurbished" is remapped to "Unknown Condition" everywhere via
 normalize_condition(), since it's just the ungraded-stock placeholder and isn't
 comparable across stores. cellbuddy adds "No Face ID"/"No Touch ID" (store-specific);
-budli adds "Unboxed - Brand Warranty" (store-specific) and uses Good for "Good Condition";
+budli adds "Usable", "Preowned", and "Unboxed" (from the product tags on its newer
+"Used …" listings — see the budli scraper note) and uses Good for "Good Condition"
+(older title-parenthetical listings); its "Refurbished" stays "Unknown Condition";
 itradeit adds "Open Box" (its open-box-phones category; its certified-refurbished
 category folds to "Unknown Condition"). gadgetrebirth adds "Like New" (shares
 Tetro's label), "Excellent", and "New" (store-specific grades); its "Good"/"Fair"

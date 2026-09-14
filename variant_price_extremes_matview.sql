@@ -84,3 +84,8 @@ end;
 $$;
 
 grant execute on function refresh_latest_prices() to service_role;
+
+-- NOTE: refresh_latest_prices() is redefined AGAIN in offers_slim_matview.sql to
+-- ALSO refresh offers_slim_mat + specs_by_model_mat (four matviews total). Apply
+-- that file AFTER this one; if you re-apply THIS file afterwards, re-apply
+-- offers_slim_matview.sql too (else the function reverts to two refreshes).

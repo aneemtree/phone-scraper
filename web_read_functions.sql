@@ -25,6 +25,13 @@
 -- Both are SECURITY DEFINER with their own statement_timeout so the full
 -- aggregation isn't cut by the web role's 8s statement_timeout. Idempotent.
 -- Apply AFTER specs_schema.sql (they read the `offers` view + `specs` table).
+--
+-- SUPERSEDED (incident 2026-09-13): the versions BELOW still read the live
+-- `offers` view / `specs` table directly, which ran 10-106s each under concurrent
+-- ISR-regen load and caused a statement-timeout storm. offers_slim_matview.sql
+-- REDEFINES both functions to read matview snapshots (~0.6s / ~0.25s). Apply
+-- offers_slim_matview.sql AFTER this file; if you re-apply THIS file, re-apply
+-- offers_slim_matview.sql too (else the functions revert to the slow direct reads).
 -- ---------------------------------------------------------------------------
 
 -- Lean offers: the whole set as one jsonb row (bypasses PostgREST's 1000-row

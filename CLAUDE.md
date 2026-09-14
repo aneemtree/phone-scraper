@@ -317,6 +317,32 @@ each card by lower(model); image_url stays resolved on the offer row. Payload
 aggregate a per-model blob across per-offer rows — the fan-out multiplies memory;
 keep per-model data in its own per-model fetch.
 
+### Web read performance: offers_slim_mat / specs_by_model_mat (IMPORTANT — timeout storm 2026-09-13)
+The decoupling above cut the PAYLOAD, but both RPCs still COMPUTED live on every
+call: all_offers_json() read the `offers` view (its per-row `specs` LEFT JOIN
+LATERAL ran 10-106s) and specs_by_model_json() ran an 89s distinct-on over
+`specs`. Concurrent ISR-regen/crawler calls (the long-tail /[...filter] combos +
+stale phone pages each fire these) piled up and drove Postgres into a ~17h
+`canceling statement due to statement timeout` STORM (200-480/hr) with periodic
+crash-restarts — timing out the website (/phone/[variant], /[...filter] "upstream
+request timeout") AND the scrapers (ReadTimeout / pool-timeout / schema-cache
+APIErrors). Diagnosed from the Postgres slow-query log (all_offers_json at
+12/25/106s, specs at 89s) via the Supabase logs. FIX (`offers_slim_matview.sql`,
+same pattern as latest_prices_mat/variant_price_extremes_mat): snapshot both into
+matviews the RPCs read — `offers_slim_mat` (the offers row MINUS specs/gsm_url,
+byte-identical output) and `specs_by_model_mat` (the distinct-on-per-model set) —
+plus a functional index `specs_lower_model_idx on specs(lower(model))` that also
+speeds the live offers lateral. Per-call cost 10-106s -> ~0.6s, 89s -> ~0.25s.
+`refresh_latest_prices()` was extended to refresh ALL FOUR matviews (latest_prices
+first, then extremes, offers_slim, specs_by_model; ~7s total) — the scraper's
+existing end-of-pipeline call, so NO scraper/workflow change. TRADEOFF: the
+LISTING feed's `phones` fields (model/storage/ram/in_stock/url) + resolved
+image_url are now as-of-last-refresh (in_stock/prices change only on a scrape
+anyway; admin /admin/ram + image edits lag until the next scrape refresh —
+acceptable, the web is 6h-ISR-cached). The live `offers` view is UNCHANGED, so
+notify.py + any direct reader still get live data. It's a DB-level fix — takes
+effect for the live site with NO web deploy.
+
 ### Variant deep-links
 Save the per-variant URL, not the bare product URL, so "Visit store" lands on the
 exact offer: Ovantica/Cashify use the variant id in the path (`…/<slug>/<id>`),
